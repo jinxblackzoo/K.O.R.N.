@@ -36,13 +36,11 @@
 // KONFIGURATION - HIER ALLE PARAMETER EINSTELLEN
 // ============================================================================
 
-// FÜTTERUNGSZEITEN (24h Format, sekundengenau)
-const int FUETTERUNG_STUNDE_1 = 18;   // Erste Fütterung: Stunde
-const int FUETTERUNG_MINUTE_1 = 46;   // Minute
-const int FUETTERUNG_SEKUNDE_1 = 0;   // Sekunde
-const int FUETTERUNG_STUNDE_2 = 19;   // Zweite Fütterung: Stunde
-const int FUETTERUNG_MINUTE_2 = 0;    // Minute
-const int FUETTERUNG_SEKUNDE_2 = 0;   // Sekunde
+// FÜTTERUNGSZEITEN (24h Format)
+const int FUETTERUNG_STUNDE_1 = 7;   // Erste Fütterung um 16:58 Uhr
+const int FUETTERUNG_MINUTE_1 = 0;
+const int FUETTERUNG_STUNDE_2 = 19;   // Zweite Fütterung um 19:00 Uhr  
+const int FUETTERUNG_MINUTE_2 = 2;
 
 // MOTORPARAMETER
 const int MOTOR_BESCHLEUNIGUNG = 100;  // Beschleunigung in Steps/s²
@@ -177,23 +175,23 @@ void loop() {
     Serial.println(" - Fütterungsflags zurückgesetzt");
   }
   
-  // Erste Fütterungszeit prüfen - FÜTTERUNG (sekundengenau)
+  // Erste Fütterungszeit prüfen - FÜTTERUNG
   if (!fuetterung1_heute && 
       jetzt.hour() == FUETTERUNG_STUNDE_1 && 
-      jetzt.minute() == FUETTERUNG_MINUTE_1 &&
-      jetzt.second() == FUETTERUNG_SEKUNDE_1) {
-    Serial.println("🍽️ ERSTE FÜTTERUNG STARTET (sekundengenau) ...");
+      jetzt.minute() == FUETTERUNG_MINUTE_1) {
+    
+    Serial.println("🍽️ ERSTE FÜTTERUNG STARTET...");
     fuetterungsvorgang();
     fuetterung1_heute = true;
     Serial.println("✅ Erste Fütterung abgeschlossen!");
   }
   
-  // Zweite Fütterungszeit prüfen - FÜTTERUNG (sekundengenau)
+  // Zweite Fütterungszeit prüfen - FÜTTERUNG
   if (!fuetterung2_heute && 
       jetzt.hour() == FUETTERUNG_STUNDE_2 && 
-      jetzt.minute() == FUETTERUNG_MINUTE_2 &&
-      jetzt.second() == FUETTERUNG_SEKUNDE_2) {
-    Serial.println("🍽️ ZWEITE FÜTTERUNG STARTET (sekundengenau) ...");
+      jetzt.minute() == FUETTERUNG_MINUTE_2) {
+    
+    Serial.println("🍽️ ZWEITE FÜTTERUNG STARTET...");
     fuetterungsvorgang();
     fuetterung2_heute = true;
     Serial.println("✅ Zweite Fütterung abgeschlossen!");
