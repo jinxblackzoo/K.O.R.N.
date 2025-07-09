@@ -71,7 +71,7 @@ Manueller Trigger:
 - **Optionale Temperaturanzeige** (RTC-Sensor)
 
 ### 📱 Manuelle Bedienung
-- **Hardware-Trigger** durch Kurzschluss Pin 10+11
+- **Hardware-Trigger** durch Kurzschluss Pin 10+11 // Da keine Hardware verfügbar war, musste eine temporäre Lösung her. Ein Pushbutton wird die Behelfslösung später ersetzen.
 - **Sofortige Fütterung** unabhängig von Zeitplänen
 
 ## 🔧 Installation & Setup
