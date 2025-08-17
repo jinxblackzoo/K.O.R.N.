@@ -11,9 +11,9 @@ Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter)
 
 ## Revision 1 wurde verworfen
 
-## Revision 2 enthält die neuen CAD Dateien und eine Steuerung mit ARDUINO Uno R3
+## Revision 2 enthält die neuen CAD Dateien und eine Steuerung mit ARDUINO Uno R3 
 
-## Revision 3 basiert auf den CAD Dateien von Rev.2 und eine Steuerung mit ARDUINO Uno R4 mit Wifi
+## Revision 3 basiert auf den CAD Dateien von Rev.2 und eine Steuerung mit ARDUINO Uno R4 mit Wifi (Stand August 25 noch in der Entwicklung!!)
 
 
 
