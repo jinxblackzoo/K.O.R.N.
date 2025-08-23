@@ -74,9 +74,14 @@ Relay:
 * ✅ Einfache Handy-Webseite (mobilfreundlich):
   - ✅ Zwei Fütterungszeiten einstellen
   - ✅ Zweite Fütterungszeit deaktivieren
-  - ✅ MOTOR_SCHRITTE festlegen
+  - ✅ Motor-Laufzeit in Sekunden festlegen (zeitbasiert, unabhängig von Microstep)
   - ✅ Countdown bis zur nächsten Fütterung
   - ✅ Button "Jetzt füttern"
+  - ✅ Warn-Button „Blockade lösen (Rechtslauf)“ mit Laufzeit-Eingabe (Standard 2 s; Begrenzung 1–60 s). Nur kurzfristig verwenden!
+  - ✅ Button „Interne Uhr aktualisieren“ (setzt die interne RTC auf die Gerätezeit des Browsers/Clients)
+  - ✅ Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+  - ✅ 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
+  - ✅ Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
 * ✅ Manuelle Bedienung:
   - ✅ Kurzschluss Pin 10 ↔ 11 als Taster
   - ✅ Sofortige Fütterung unabhängig vom Zeitplan
@@ -112,7 +117,8 @@ Hinweise:
 ### 🧰 Standardwerte
 * Fütterungszeit 1: 07:01
 * Fütterungszeit 2: 16:01 (aktiv)
-* MOTOR_SCHRITTE: 2000
+* Standard-Laufzeit: 5 s (intern 1000 Steps/s → 5000 Steps)
+* Blockadelöser (UI-Default): 2 s (nicht persistent, nur Eingabewert in der Seite)
 
 ---
 
@@ -130,7 +136,7 @@ Hinweise:
 • Letzte Fütterung (Zeit, Schritte)
 • Nächste Fütterung(en) inkl. Countdown
 • Plan-Status (zweite Zeit aktiv/deaktiv)
-• MOTOR_SCHRITTE (aktuelle Einstellung)
+• Motor-Parameter: Schritte (intern aus Sekunden berechnet)
 • RTC/Config-Status (RTC OK/FAIL, Config aus RAM/Defaults)
 • Uptime
 
@@ -141,7 +147,7 @@ Ausgabe-Rhythmus:
 Beispiel (eine Zeile):
 
 ```
-AP:KORN Pw:Chaosfeeder IP:192.168.4.1 | 2025-08-17 18:48 | Last:17:10(800) | Next1:19:00(00:12) Next2:- [off] | Steps:800 | RTC:OK CFG:RAM | Up:00:32
+AP:KORN Pw:Chaosfeeder IP:192.168.4.1 | 2025-08-17 18:48 | Last:17:10(5000) | Next1:19:00(00:12) Next2:- [off] | Steps:5000 | RTC:OK CFG:RAM | Up:00:32
 ```
 
 Legende:

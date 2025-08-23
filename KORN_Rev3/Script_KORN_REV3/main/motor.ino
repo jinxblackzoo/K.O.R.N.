@@ -33,6 +33,7 @@ static AccelStepper stepper(AccelStepper::DRIVER, PUL_PIN, DIR_PIN);
 
 // Vorwärtsdeklarationen aus main.ino (Defaults)
 extern const int MOTOR_SCHRITTE;
+extern const int FEED_STEPS_PER_SEC; // konstante Schrittfrequenz für zeitbasierte Fütterung
 
 void motorInit() {
   pinMode(PUL_PIN, OUTPUT);
@@ -50,10 +51,9 @@ void motorInit() {
 
   // Polaritäten für Step/Dir/Enable setzen (AccelStepper-intern)
   stepper.setPinsInverted(INVERT_DIR, INVERT_STEP, !ENABLE_ACTIVE_HIGH);
-
-  stepper.setMaxSpeed(1000.0);      // Platzhalter – Feintuning folgt
-  stepper.setAcceleration(1000.0);
-  stepper.setMaxSpeed(2000.0);      // etwas höher für verlässliche Bewegung
+  // Basiswerte; tatsächliche Feed-Geschwindigkeit wird vor jedem Lauf gesetzt
+  stepper.setMaxSpeed(4000.0);
+  stepper.setAcceleration(8000.0);
   stepper.setMinPulseWidth(8);      // Min. Pulsbreite in µs (DM320T fordert ≥7.5µs)
 }
 
@@ -78,9 +78,13 @@ bool motorFeed(int steps, bool dirCW) {
   digitalWrite(DIR_PIN, dirCW ? HIGH : LOW);
   motorEnable(true);
   delay(50); // Enable-Setup-Zeit
-  stepper.move(steps * (dirCW ? 1 : -1));
-  // Blockierender Lauf bis Zielposition (interne Taktung durch AccelStepper)
-  stepper.runToPosition();
+  // Zeitbasierte konstante Geschwindigkeit:  FEED_STEPS_PER_SEC
+  long target = steps * (dirCW ? 1 : -1);
+  stepper.move(target);
+  stepper.setSpeed(dirCW ? (float)FEED_STEPS_PER_SEC : -(float)FEED_STEPS_PER_SEC);
+  while (stepper.distanceToGo() != 0) {
+    stepper.runSpeedToPosition();
+  }
   // 5) Nachlauf
   delay(200);
   // 6) Relais AUS, Treiber AUS

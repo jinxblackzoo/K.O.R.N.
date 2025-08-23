@@ -27,7 +27,8 @@ const int FUETTERUNG_MINUTE_1 = 1;
 const int FUETTERUNG_STUNDE_2 = 16;
 const int FUETTERUNG_MINUTE_2 = 1;
 bool ZWEITE_ZEIT_AKTIV = true;          // zweite Zeit aktiv
-const int MOTOR_SCHRITTE = 2000;        // Schritte pro Fütterung
+const int FEED_STEPS_PER_SEC = 1000;    // feste Schrittfrequenz für zeitbasierte Fütterung
+const int MOTOR_SCHRITTE = 2000;        // legacy: wird aus Sekunden berechnet (secs*FEED_STEPS_PER_SEC)
 const bool MOTOR_DIR_CW = false;        // false = CCW (links), true = CW (rechts)
 
 // Serielle Minimal-Ausgabe Intervall (Sekunden)
@@ -118,6 +119,21 @@ void rtcSyncToCompile() {
   Rtc.SetDateTime(compiled);
 }
 
+// Auf Anforderung: RTC auf vom Client übergebene lokale Gerätezeit setzen
+void rtcSet(uint16_t y, uint8_t m, uint8_t d, uint8_t H, uint8_t M, uint8_t S) {
+  // einfache Plausibilitätsgrenzen (keine komplexe Monatsprüfung)
+  if (m < 1 || m > 12) return;
+  if (d < 1 || d > 31) return;
+  if (H > 23 || M > 59 || S > 59) return;
+  // Sicherstellen: Schreibschutz aus, Uhr läuft
+  Rtc.SetIsWriteProtected(false);
+  if (!Rtc.GetIsRunning()) {
+    Rtc.SetIsRunning(true);
+  }
+  RtcDateTime t(y, m, d, H, M, S);
+  Rtc.SetDateTime(t);
+}
+
 static void cfgApplyDefaults() {
   gCfg.magic = 0xBEEF;
   gCfg.v = 1;
@@ -126,7 +142,8 @@ static void cfgApplyDefaults() {
   gCfg.h2 = FUETTERUNG_STUNDE_2;
   gCfg.m2 = FUETTERUNG_MINUTE_2;
   gCfg.active2 = ZWEITE_ZEIT_AKTIV ? 1 : 0;
-  gCfg.steps = MOTOR_SCHRITTE;
+  // Standard 5 Sekunden Laufzeit -> Schritte = 5s * FEED_STEPS_PER_SEC
+  gCfg.steps = 5 * FEED_STEPS_PER_SEC;
   gCfg.crc = cfgChecksum(gCfg);
   gCfgValid = true; // defaults gelten als gültig
 }
@@ -368,13 +385,19 @@ static void printStatusPeriodic() {
 static void rtcInitAndMaybeSet() {
   // Initialisierung der DS1302 (Makuna)
   Rtc.Begin();
-  // Schreibschutz aus und Uhr an
+  // Schreibschutz aus
   Rtc.SetIsWriteProtected(false);
-  Rtc.SetIsRunning(true);
-  // Beim Upload grundsätzlich auf Kompilierzeit setzen (lokale PC-Zeit)
-  // Hinweis: __DATE__/__TIME__ stammen vom Build – entspricht der IDE-PC-Zeit inkl. Zeitzone.
-  RtcDateTime compiled(__DATE__, __TIME__);
-  Rtc.SetDateTime(compiled);
+  // Falls Uhr nicht läuft: starten
+  if (!Rtc.GetIsRunning()) {
+    Rtc.SetIsRunning(true);
+  }
+  // Nur setzen, wenn Zeit ungültig (z.B. nach Batterieverlust)
+  bool valid = Rtc.IsDateTimeValid();
+  if (!valid) {
+    // Fallback: Kompilierzeit (letzter Build)
+    RtcDateTime compiled(__DATE__, __TIME__);
+    Rtc.SetDateTime(compiled);
+  }
 }
 
 // ============================================================================
