@@ -29,6 +29,8 @@ int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint16_t steps);
+// Batterie-Indikator aus main.ino (softwarebasierte Heuristik)
+bool batteryLikelyOK();
 
 // RAM-schonendes Streaming der Header/Footer direkt aus Flash
 static void sendHeader(WiFiClient &client) {
@@ -186,6 +188,14 @@ static void handleRoot(WiFiClient &client) {
     "f.H.value=t.getHours();f.M.value=t.getMinutes();f.S.value=t.getSeconds();f.submit();})()\">KORN-Zeit Update</button>"
     "</form>"
   ));
+  // Batterie-Indikator (deaktivierter Button, nur Anzeige)
+  client.print(F("<div style=\"margin-top:6px\">"));
+  if (batteryLikelyOK()) {
+    client.print(F("<button type=\"button\" disabled style=\"background:#2e7d32;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.9;cursor:default\">Batterie OK</button>"));
+  } else {
+    client.print(F("<button type=\"button\" disabled style=\"background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.95;cursor:default\">Bitte CR2032 tauschen</button>"));
+  }
+  client.print(F("</div>"));
   // Minimal-Skript: aktualisiert NUR die Status-Uhr (#clock) und Countdowns sekündlich
   client.print(F("<script>"));
   client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));if(isNaN(h)||isNaN(m)||h<0||m<0){var t=new Date();h=t.getHours();m=t.getMinutes();}var s=(new Date()).getSeconds();function tick(){s++;if(s>=60){s=0;m++;if(m>=60){m=0;h=(h+1)%24;}}el.textContent=pad(h)+':'+pad(m)+':'+pad(s);var nowSec=h*3600+m*60+s;var n1h=parseInt(el.getAttribute('data-n1h'));var n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0) diff+=86400;var c1=document.getElementById('c1');if(c1) c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h'));var n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0) diff2+=86400;var c2=document.getElementById('c2');if(c2) c2.textContent=fmtHMS(diff2);} } setInterval(tick,1000); tick();} if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));

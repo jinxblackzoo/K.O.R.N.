@@ -75,6 +75,8 @@ int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint16_t steps);
+// Batterie-Indikator (softwarebasiert): RTC-Zeit gültig und Config aus RTC-RAM
+bool batteryLikelyOK();
 
 // ============================================================================
 // Serielle Minimal-Ausgabe
@@ -104,6 +106,13 @@ struct KConfig {
 static KConfig gCfg;         // aktuelle Konfiguration im RAM
 static bool gCfgValid = false; // Anzeige für Statuszeile CFG:OK/--
 static bool gCfgFromRam = false; // Herkunft: true=aus RTC-RAM, false=Defaults
+
+bool batteryLikelyOK() {
+  // Heuristik: Backup-Batterie ist wahrscheinlich ok, wenn
+  // 1) RTC eine gültige Zeit meldet und
+  // 2) die Konfiguration erfolgreich aus dem DS1302-RAM gelesen wurde
+  return Rtc.IsDateTimeValid() && gCfgFromRam;
+}
 
 static uint16_t cfgChecksum(const KConfig &c) {
   // Sehr einfache Prüfsumme über die payload-Felder (ohne magic, v, crc)
