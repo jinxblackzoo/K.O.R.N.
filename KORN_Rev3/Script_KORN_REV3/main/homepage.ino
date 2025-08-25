@@ -304,7 +304,6 @@ static void handleSave(WiFiClient &client, const String &body) {
   int h2 = cfgGetH2();
   int m2 = cfgGetM2();
   bool a2 = cfgGetActive2();
-  int steps = cfgGetSteps();
 
   if (kvFind(body, "h1", sh1)) h1 = sh1.toInt();
   if (kvFind(body, "m1", sm1)) m1 = sm1.toInt();
@@ -318,10 +317,10 @@ static void handleSave(WiFiClient &client, const String &body) {
     if (v >= 1 && v <= 600) secVal = v;
   }
   // Sekunden in Steps umrechnen (bei 1000 Steps/s)
-  uint32_t steps = secVal * (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
+  uint32_t newSteps = secVal * (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
 
   // In Konfiguration übernehmen und speichern
-  cfgUpdateAndSave((uint8_t)h1, (uint8_t)m1, (uint8_t)h2, (uint8_t)m2, a2, steps);
+  cfgUpdateAndSave((uint8_t)h1, (uint8_t)m1, (uint8_t)h2, (uint8_t)m2, a2, newSteps);
 
   // 303 Redirect zurück auf Startseite (verhindert doppeltes Absenden)
   client.print(F("HTTP/1.1 303 See Other\r\n"));
