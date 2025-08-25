@@ -7,14 +7,17 @@ extern const int MOTOR_SCHRITTE; // aus main.ino (legacy)
 extern const int FEED_STEPS_PER_SEC; // feste Schrittfrequenz für zeitbasierte Fütterung
 extern const bool MOTOR_DIR_CW;  // aus main.ino
 bool motorFeed(int steps, bool dirCW); // aus motor.ino
-// Status-Snapshot aus main.ino
-void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM,
+// Status-Snapshot aus main.ino (inkl. lastSrc)
+void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM, int &nowS,
                        int &lastH, int &lastM,
                        int &n1H, int &n1M, int &n2H, int &n2M,
                        int &c1H, int &c1M, int &c2H, int &c2M,
-                       bool &a2, int &steps);
+                       bool &a2, int &steps, uint8_t &lastSrc, bool &delayWarning,
+                       int &actualH, int &actualM, int &actualS);
 // Zentrale Sofortfütterung aus main (vereinheitlicht Last/Marker)
 void requestImmediateFeed();
+// Asynchroner Web-Trigger (Flag in main.ino)
+void requestFeedFromWebAsync();
 // RTC Sync-API aus main.ino
 void rtcSyncToCompile();
 // Neue API: RTC auf vom Client übergebene Gerätezeit setzen
@@ -28,7 +31,7 @@ int cfgGetH2();
 int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
-void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint16_t steps);
+void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
 // Batterie-Indikator aus main.ino (softwarebasierte Heuristik)
 bool batteryLikelyOK();
 
@@ -48,7 +51,7 @@ static void sendHeader(WiFiClient &client) {
   client.print(F("<!DOCTYPE html>\n<html lang=\"de\">\n<head><meta charset=\"utf-8\">"));
   client.print(F("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"));
   client.print(F("<title>K.O.R.N. der Katastrophal Organisierte Runde Nahrungsmittelspender</title>"));
-  client.print(F("<style>body{font-family:sans-serif;margin:16px}label{display:block;margin:8px 0}input[type=number]{width:5em}button{padding:8px 12px;margin-top:8px}hr{border:0;border-top:1px solid #000;margin:16px 0}</style>"));
+  client.print(F("<style>body{font-family:sans-serif;margin:16px}label{display:block;margin:8px 0}input[type=number],input[type=tel]{width:6em;font-size:18px}button{padding:12px 16px;margin-top:8px;font-size:16px}hr{border:0;border-top:1px solid #000;margin:16px 0}</style>"));
   client.print(F("</head><body><h1>K.O.R.N. der Katastrophal Organisierte Runde Nahrungsmittelspender</h1>"));
 }
 
@@ -74,47 +77,89 @@ static void handleRoot(WiFiClient &client) {
   sendHeader(client);
   client.print(F("<h2>Status</h2>"));
   // Statuswerte abrufen
-  bool rtcOk=false, a2=false; int nowH=-1,nowM=-1,lastH=-1,lastM=-1,n1H=-1,n1M=-1,n2H=-1,n2M=-1,c1H=-1,c1M=-1,c2H=-1,c2M=-1,steps=0;
-  getStatusSnapshot(rtcOk, nowH, nowM, lastH, lastM, n1H, n1M, n2H, n2M, c1H, c1M, c2H, c2M, a2, steps);
+  bool rtcOk=false, a2=false, delayWarning=false; int nowH=-1,nowM=-1,nowS=-1,lastH=-1,lastM=-1,n1H=-1,n1M=-1,n2H=-1,n2M=-1,c1H=-1,c1M=-1,c2H=-1,c2M=-1,steps=0,actualH=-1,actualM=-1,actualS=-1; uint8_t lastSrc=0;
+  getStatusSnapshot(rtcOk, nowH, nowM, nowS, lastH, lastM, n1H, n1M, n2H, n2M, c1H, c1M, c2H, c2M, a2, steps, lastSrc, delayWarning, actualH, actualM, actualS);
   char buf[16];
   // Zeile: Zeit jetzt (self-updating via JS)
   client.print(F("<p><b>KORN-Zeit:</b> "));
   client.print(F("<span id=\"clock\""));
   client.print(F(" data-h=\"")); client.print(rtcOk ? nowH : -1); client.print(F("\""));
   client.print(F(" data-m=\"")); client.print(rtcOk ? nowM : -1); client.print(F("\""));
+  client.print(F(" data-s=\"")); client.print(rtcOk ? nowS : -1); client.print(F("\""));
   client.print(F(" data-n1h=\"")); client.print((n1H>=0)?n1H:-1); client.print(F("\""));
   client.print(F(" data-n1m=\"")); client.print((n1M>=0)?n1M:-1); client.print(F("\""));
   client.print(F(" data-n2h=\"")); client.print((a2 && n2H>=0)?n2H:-1); client.print(F("\""));
   client.print(F(" data-n2m=\"")); client.print((a2 && n2M>=0)?n2M:-1); client.print(F("\""));
   client.print(F(">"));
-  if (rtcOk) { snprintf(buf, sizeof(buf), "%02d:%02d", nowH, nowM); client.print(buf); }
-  else client.print(F("--:--"));
-  client.print(F("</span>"));
-  // Zeile: Letzte Fütterung
-  client.print(F(" | <b>Last:</b> "));
+  if (rtcOk) { snprintf(buf, sizeof(buf), "%02d:%02d:%02d", nowH, nowM, nowS); client.print(buf); }
+  else client.print(F("--:--:--"));
+  client.print(F("</span></p>"));
+  
+  // Letzte Fütterung
+  client.print(F("<p><b>Letzte Fütterung:</b> <span id=\"lastfeed\" data-h=\""));
+  client.print((lastH>=0)?lastH:-1);
+  client.print(F("\" data-m=\""));
+  client.print((lastM>=0)?lastM:-1);
+  client.print(F("\" data-src=\""));
+  client.print(lastSrc);
+  client.print(F("\">")); 
   if (lastH>=0 && lastM>=0) { snprintf(buf, sizeof(buf), "%02d:%02d", lastH, lastM); client.print(buf); }
   else client.print(F("--:--"));
-  // Zeile: Next1 + Countdown
-  client.print(F(" | <b>Next1:</b> "));
-  if (n1H>=0 && n1M>=0) { snprintf(buf, sizeof(buf), "%02d:%02d", n1H, n1M); client.print(buf); }
-  else client.print(F("--:--"));
-  client.print(F(" (T-<span id=\"c1\">"));
-  if (c1H>=0 && c1M>=0) { snprintf(buf, sizeof(buf), "%02d:%02d", c1H, c1M); client.print(buf); }
-  else client.print(F("--:--"));
-  client.print(F("</span>)"));
-  // Zeile: Next2 + Countdown bzw. off
-  client.print(F(" | <b>Next2:</b> "));
-  if (a2 && n2H>=0 && n2M>=0) { snprintf(buf, sizeof(buf), "%02d:%02d", n2H, n2M); client.print(buf); }
-  else client.print(F("--"));
-  client.print(F(" [T-<span id=\"c2\">"));
-  if (a2 && c2H>=0 && c2M>=0) { snprintf(buf, sizeof(buf), "%02d:%02d", c2H, c2M); client.print(buf); }
-  else client.print(F("--:--"));
-  client.print(F("</span>"));
-  client.print(a2 ? F("") : F("off"));
-  client.print(F("]"));
-  // Zeile: Steps und Status
-  client.print(F(" | <b>Steps:</b> ")); client.print(steps);
-  client.print(F(" | <b>RTC:</b> ")); client.print(rtcOk?F("OK"):F("--"));
+  // Quelle der letzten Fütterung
+  switch (lastSrc) {
+    case 1: client.print(F(" [Manuell]")); break;
+    case 2: client.print(F(" [Web]")); break;
+    case 3: client.print(F(" [Fütterung 1]")); break;
+    case 4: client.print(F(" [Fütterung 2]")); break;
+    default: break;
+  }
+  client.print(F("</span></p>"));
+  
+  // Nächste Fütterung (zeitlich nächste)
+  client.print(F("<p><b>Nächste Fütterung:</b> "));
+  if (n1H>=0 && n1M>=0) { 
+    snprintf(buf, sizeof(buf), "%02d:%02d", n1H, n1M); 
+    client.print(buf); 
+    // Zeit bis zur nächsten Fütterung direkt dahinter
+    client.print(F(" (in <span id=\"c1\">"));
+    if (c1H>=0 && c1M>=0) { snprintf(buf, sizeof(buf), "%02d:%02d", c1H, c1M); client.print(buf); }
+    else client.print(F("--:--"));
+    client.print(F("</span>)"));
+    if (delayWarning) {
+      client.print(F(" <span style=\"color:#d63384;font-size:0.9em\">⚠ Verzögert durch 2-Min-Mindestabstand"));
+      if (actualH >= 0 && actualM >= 0 && actualS >= 0) {
+        client.print(F(" → tatsächlich um "));
+        if (actualH < 10) client.print('0'); client.print(actualH); client.print(':');
+        if (actualM < 10) client.print('0'); client.print(actualM); client.print(':');
+        if (actualS < 10) client.print('0'); client.print(actualS);
+      }
+      client.print(F("</span>"));
+    }
+  } else {
+    client.print(F("--:--"));
+  }
+  client.print(F("</p>"));
+  
+  // Übernächste Fütterung
+  client.print(F("<p><b>Übernächste Fütterung:</b> "));
+  if (a2 && n2H>=0 && n2M>=0) { 
+    formatHM(buf, sizeof(buf), n2H, n2M);
+    client.print(buf);
+    client.print(F(" (in "));
+    formatHM(buf, sizeof(buf), c2H, c2M);
+    client.print(buf);
+    client.print(F(")"));
+  } else if (a2) {
+    client.print(F("--:--"));
+  } else {
+    client.print(F("deaktiviert"));
+  }
+  client.print(F("</p>"));
+  
+  // System-Status
+  int laufzeitSek = steps / 1000; // steps / FEED_STEPS_PER_SEC
+  client.print(F("<p><b>Laufzeit:</b> ")); client.print(laufzeitSek); client.print(F("s"));
+  client.print(F(" | <b>RTC-Status:</b> ")); client.print(rtcOk?F("OK"):F("Fehler"));
   client.print(F("</p>"));
 
   // AP-Infos (SSID/IP)
@@ -128,19 +173,19 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("</p>"));
 
   client.print(F("<h2>Konfiguration</h2>"));
-  client.print(F("<form method=\"POST\" action=\"/save\">"));
+  client.print(F("<form method=\"POST\" action=\"/save\" autocomplete=\"off\" onsubmit=\"(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true;b.textContent='Speichere…';}})(this)\">"));
 
-  client.print(F("<label>Fütterung 1: <input type=\"number\" name=\"h1\" min=\"0\" max=\"23\" value=\""));
+  client.print(F("<label>Fütterung 1: <input type=\"number\" name=\"h1\" min=\"0\" max=\"23\" inputmode=\"numeric\" pattern=\"[0-9]*\" enterkeyhint=\"done\" value=\""));
   client.print(cfgGetH1());
   client.print(F("\"> : "));
-  client.print(F("<input type=\"number\" name=\"m1\" min=\"0\" max=\"59\" value=\""));
+  client.print(F("<input type=\"number\" name=\"m1\" min=\"0\" max=\"59\" inputmode=\"numeric\" pattern=\"[0-9]*\" enterkeyhint=\"done\" value=\""));
   client.print(cfgGetM1());
   client.print(F("\"></label>"));
 
-  client.print(F("<label>Fütterung 2: <input type=\"number\" name=\"h2\" min=\"0\" max=\"23\" value=\""));
+  client.print(F("<label>Fütterung 2: <input type=\"number\" name=\"h2\" min=\"0\" max=\"23\" inputmode=\"numeric\" pattern=\"[0-9]*\" enterkeyhint=\"done\" value=\""));
   client.print(cfgGetH2());
   client.print(F("\"> : "));
-  client.print(F("<input type=\"number\" name=\"m2\" min=\"0\" max=\"59\" value=\""));
+  client.print(F("<input type=\"number\" name=\"m2\" min=\"0\" max=\"59\" inputmode=\"numeric\" pattern=\"[0-9]*\" enterkeyhint=\"done\" value=\""));
   client.print(cfgGetM2());
   client.print(F("\"></label>"));
 
@@ -151,13 +196,16 @@ static void handleRoot(WiFiClient &client) {
   // Sekundenanzeige: aus Steps zurückrechnen
   int secs = cfgGetSteps() / (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
   if (secs < 1) secs = 1;
-  client.print(F("<label>Motor-Laufzeit (Sekunden): <input type=\"number\" name=\"sec\" min=\"1\" max=\"60\" value=\""));
+  client.print(F("<label>Motor-Laufzeit (Sekunden): <input type=\"number\" name=\"sec\" min=\"1\" max=\"600\" inputmode=\"numeric\" pattern=\"[0-9]*\" enterkeyhint=\"done\" value=\""));
   client.print(secs);
   client.print(F("\"></label>"));
-
-
+  // Hinweise zu Limits und thermischer Belastung
+  client.print(F("<p><small><strong>Hinweise:</strong><br>"));
+  client.print(F("• Mindestabstand zwischen Fütterungen: 2 Minuten<br>"));
+  client.print(F("• Max. Laufzeit: 10 Minuten (thermische Belastung NEMA17)<br>"));
+  client.print(F("• Empfohlen für große Scharen: 2-5 Minuten</small></p>"));
   client.print(F("<button type=\"submit\">Speichern</button></form>"));
-  client.print(F("<hr><form method=\"POST\" action=\"/feed\"><button>Sofort füttern</button></form>"));
+  client.print(F("<hr><form method=\"POST\" action=\"/feed\" onsubmit=\"(function(f){var b=f.querySelector('button'); if(b){b.disabled=true;b.textContent='Wird ausgelöst…';}})(this)\"><button>Sofort füttern</button></form>"));
   // Zusätzlicher Trenner zwischen Sofort füttern und Blockadelöser
   client.print(F("<hr>"));
   // Blockadelöser: separater Rechtslauf mit Warnung, ohne Speicherung
@@ -168,7 +216,7 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<form id=\"unclog\" method=\"POST\" action=\"/jogcw\" style=\"margin-top:6px\" data-sps=\""));
   client.print(FEED_STEPS_PER_SEC);
   client.print(F("\">"));
-  client.print(F("<label>Laufzeit (Sekunden): <input type=\"number\" name=\"sec2\" min=\"1\" max=\"60\" value=\""));
+  client.print(F("<label>Laufzeit (Sekunden): <input type=\"number\" name=\"sec2\" min=\"1\" max=\"600\" value=\""));
   client.print(2);
   client.print(F("\" style=\"width:6em\"></label>"));
   client.print(F("<input type=\"hidden\" name=\"n\" value=\"200\">"));
@@ -196,20 +244,36 @@ static void handleRoot(WiFiClient &client) {
     client.print(F("<button type=\"button\" disabled style=\"background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.95;cursor:default\">Bitte CR2032 tauschen</button>"));
   }
   client.print(F("</div>"));
-  // Minimal-Skript: aktualisiert NUR die Status-Uhr (#clock) und Countdowns sekündlich
+  // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
   client.print(F("<script>"));
-  client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));if(isNaN(h)||isNaN(m)||h<0||m<0){var t=new Date();h=t.getHours();m=t.getMinutes();}var s=(new Date()).getSeconds();function tick(){s++;if(s>=60){s=0;m++;if(m>=60){m=0;h=(h+1)%24;}}el.textContent=pad(h)+':'+pad(m)+':'+pad(s);var nowSec=h*3600+m*60+s;var n1h=parseInt(el.getAttribute('data-n1h'));var n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0) diff+=86400;var c1=document.getElementById('c1');if(c1) c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h'));var n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0) diff2+=86400;var c2=document.getElementById('c2');if(c2) c2.textContent=fmtHMS(diff2);} } setInterval(tick,1000); tick();} if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));
+  client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}var lastUpdate=0;function updateStatus(){var xhr=new XMLHttpRequest();xhr.open('GET','/status',true);xhr.onreadystatechange=function(){if(xhr.readyState===4&&xhr.status===200){try{var data=JSON.parse(xhr.responseText);var lf=document.getElementById('lastfeed');if(lf&&data.lastH>=0&&data.lastM>=0){var src='';switch(data.lastSrc){case 1:src=' [Manuell]';break;case 2:src=' [Web]';break;case 3:src=' [Fütterung 1]';break;case 4:src=' [Fütterung 2]';break;}lf.textContent=pad(data.lastH)+':'+pad(data.lastM)+src;lf.setAttribute('data-h',data.lastH);lf.setAttribute('data-m',data.lastM);lf.setAttribute('data-src',data.lastSrc);}}catch(e){}}};xhr.send();}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));var s=parseInt(el.getAttribute('data-s'));var hasRtc=!(isNaN(h)||isNaN(m)||isNaN(s)||h<0||m<0||s<0);if(!hasRtc){var t=new Date();h=t.getHours();m=t.getMinutes();s=t.getSeconds();}var base=(h*3600+m*60+s)%86400;var t0=Date.now();function render(){var elapsed=Math.floor((Date.now()-t0)/1000);var nowSec=(base+elapsed)%86400;var H=Math.floor(nowSec/3600),R=nowSec%3600,M=Math.floor(R/60),S=R%60;el.textContent=pad(H)+':'+pad(M)+':'+pad(S);var n1h=parseInt(el.getAttribute('data-n1h')),n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0)diff+=86400;var c1=document.getElementById('c1');if(c1)c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h')),n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0)diff2+=86400;var c2=document.getElementById('c2');if(c2)c2.textContent=fmtHMS(diff2);}if(elapsed%10===0&&elapsed!==lastUpdate){updateStatus();lastUpdate=elapsed;}}setInterval(render,1000);render();}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));
   client.print(F("</script>"));
   sendFooter(client);
 }
 
+static void handleStatus(WiFiClient &client) {
+  // JSON-Status für AJAX-Updates
+  bool rtcOk, a2, delayWarning;
+  int nowH, nowM, nowS, lastH, lastM, n1H, n1M, n2H, n2M, c1H, c1M, c2H, c2M, steps, actualH, actualM, actualS;
+  uint8_t lastSrc;
+  getStatusSnapshot(rtcOk, nowH, nowM, nowS, lastH, lastM, n1H, n1M, n2H, n2M, c1H, c1M, c2H, c2M, a2, steps, lastSrc, delayWarning, actualH, actualM, actualS);
+  
+  client.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"));
+  client.print(F("{"));
+  client.print(F("\"lastH\":"));
+  client.print((lastH>=0)?lastH:-1);
+  client.print(F(",\"lastM\":"));
+  client.print((lastM>=0)?lastM:-1);
+  client.print(F(",\"lastSrc\":"));
+  client.print(lastSrc);
+  client.print(F("}"));
+}
+
 static void handleFeed(WiFiClient &client) {
-  // Sofortfütterung
-  requestImmediateFeed();
-  sendHeader(client);
-  client.print(F("<p>Fütterung ausgelöst.</p>"));
-  client.print(F("<a href=\"/\">Zurück</a>"));
-  sendFooter(client);
+  // Sofortfütterung asynchron markieren und sofort redirecten
+  requestFeedFromWebAsync();
+  client.print(F("HTTP/1.1 303 See Other\r\n"));
+  client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
 }
 
 // Sehr einfache URL-Form-Parser für application/x-www-form-urlencoded
@@ -225,11 +289,11 @@ static bool kvFind(const String &body, const String &key, String &out) {
   return true;
 }
 
-static uint16_t toUInt16(const String &s, uint16_t defv) {
+static uint32_t toUInt32(const String &s, uint32_t defv) {
   long v = s.toInt();
   if (v < 0) return defv;
-  if (v > 65535) v = 65535;
-  return (uint16_t)v;
+  if (v > 600) v = 600;  // Max. 10 Minuten Limit
+  return (uint32_t)v;
 }
 
 static void handleSave(WiFiClient &client, const String &body) {
@@ -248,13 +312,16 @@ static void handleSave(WiFiClient &client, const String &body) {
   if (kvFind(body, "m2", sm2)) m2 = sm2.toInt();
   a2 = body.indexOf("a2=") >= 0; // Checkbox gesetzt → enthalten
   // Sekunden -> Schritte umrechnen: steps = sec * FEED_STEPS_PER_SEC
-  int secVal = steps / (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
-  if (kvFind(body, "sec", ssec)) secVal = (int)toUInt16(ssec, secVal);
-  if (secVal < 1) secVal = 1; if (secVal > 60) secVal = 60; // 1..60s (65535-Steps-Limit)
-  steps = secVal * (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
+  int secVal = cfgGetSteps() / (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
+  if (kvFind(body, "sec", ssec)) {
+    uint32_t v = toUInt32(ssec, 5);
+    if (v >= 1 && v <= 600) secVal = v;
+  }
+  // Sekunden in Steps umrechnen (bei 1000 Steps/s)
+  uint32_t steps = secVal * (FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
 
   // In Konfiguration übernehmen und speichern
-  cfgUpdateAndSave((uint8_t)h1, (uint8_t)m1, (uint8_t)h2, (uint8_t)m2, a2, (uint16_t)steps);
+  cfgUpdateAndSave((uint8_t)h1, (uint8_t)m1, (uint8_t)h2, (uint8_t)m2, a2, steps);
 
   // 303 Redirect zurück auf Startseite (verhindert doppeltes Absenden)
   client.print(F("HTTP/1.1 303 See Other\r\n"));
@@ -308,12 +375,12 @@ void webHandleClient() {
     String sy, sm, sd, sH, sM, sS;
     if (kvFind(body, "y", sy) && kvFind(body, "m", sm) && kvFind(body, "d", sd)
         && kvFind(body, "H", sH) && kvFind(body, "M", sM) && kvFind(body, "S", sS)) {
-      uint16_t y = toUInt16(sy, 2025);
-      uint8_t m = (uint8_t)toUInt16(sm, 1);
-      uint8_t d = (uint8_t)toUInt16(sd, 1);
-      uint8_t H = (uint8_t)toUInt16(sH, 0);
-      uint8_t M = (uint8_t)toUInt16(sM, 0);
-      uint8_t S = (uint8_t)toUInt16(sS, 0);
+      uint16_t y = (uint16_t)toUInt32(sy, 2025);
+      uint8_t m = (uint8_t)toUInt32(sm, 1);
+      uint8_t d = (uint8_t)toUInt32(sd, 1);
+      uint8_t H = (uint8_t)toUInt32(sH, 0);
+      uint8_t M = (uint8_t)toUInt32(sM, 0);
+      uint8_t S = (uint8_t)toUInt32(sS, 0);
       rtcSet(y, m, d, H, M, S);
     }
     // Redirect zurück
@@ -334,8 +401,8 @@ void webHandleClient() {
     String sn;
     int steps = 200;
     if (kvFind(body, "n", sn)) {
-      int v = (int)toUInt16(sn, 200);
-      if (v > 0 && v <= 20000) steps = v; // einfache Begrenzung
+      uint32_t v = toUInt32(sn, 200);
+      if (v >= 1 && v <= 600000) steps = (int)v;  // Max. 600s * 1000 Steps/s
     }
     bool dirCW = reqLine.startsWith("POST /jogcw");
     // Ausführen (blockierend, wie feed), nutzt Relais/Buzzer aus motorFeed
@@ -343,6 +410,8 @@ void webHandleClient() {
     // Redirect zurück
     client.print(F("HTTP/1.1 303 See Other\r\n"));
     client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
+  } else if (reqLine.startsWith("GET /status")) {
+    handleStatus(client);
   } else if (reqLine.startsWith("POST /save")) {
     // Body lesen (robust: exakt Content-Length, mit Timeout)
     String body;

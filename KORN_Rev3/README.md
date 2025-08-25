@@ -1,7 +1,7 @@
 # K.O.R.N.
 **Katastrophal Organisierter Runder Nahrungsmittelspender**
 
-K.O.R.N. ist ein robuster, Open-Source/Hardware, wasserdichter, mit einfachen Mitteln konstruierter und mäusesicherer Fütterungsautomat für Geflügel.
+K.O.R.N. ist ein robuster, Open-Source/Hardware, wasserdichter, mit einfachen Mitteln konstruierter und mäusesicherer Fütterungsautomat für Geflügel oder alle andere Art von Hausgetier 😉
 
 ## 🎯 Projektübersicht
 
@@ -9,12 +9,16 @@ Aufgrund der enttäuschenden Erfahrung mit gekauften Fütterungsautomaten welche
 
 Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter) aus einem Silo (KG-Rohr) in einen Auswurfschacht befördert. Das Gehäuse besteht aus überall erhältlichen, robusten und günstigen HT-, bzw KG-Rohren.
 
+Revision 3 wurde entwickelt als autarke Off-Grid Funktion. Ein WLAN mit Internetverbindung und somit die Option von überall auf der Welt mittels VPN zu füttern ist hier nicht vorgesehen. Stattdessen kann KORN hier mitten im Feld ohne eigene Internetverbindung installiert werden. Der Arduino UNO R4 spannt dann einen eigenen WLAN Accesspoint auf. Mit diesem kann man sich dann mittels Smartphone verbinden. 
+Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellungen zurücksetzen. Dann mit dem Wlan KORN verbinden und im Browser 192.168.4.1 öffnen. Voila, fertig ist das eigene CCCC (ChickenCoopControlCenter) 🥳 😉
+
 ## ⚡ Hardware-Komponenten
 
 ### Arduino Uno + Stepper-Treiber System
 - **Arduino Uno R4 Wifi** (Mikrocontroller)
 - **DS1302 RTC** (Realtime Clock für präzise Zeitsteuerung)
-- **NEMA Stepper Motor** mit Treiber (für Förderschnecke)
+- **NEMA Stepper Motor** Antrieb
+- **DM320T Stepper-Motor Treiber** Motortreiber
 - **Relais-ModulJQC3F oder ähnliches  NO/COM/NC** (Stromversorgung Motor ein/aus)
 - **Aktiver Buzzer** (Akustische Warnsignale)
 - **Pushbutton momentarily** (Pin 10+11 Kurzschluss)
@@ -69,19 +73,31 @@ Relay:
 
 ## 🚀 Software-Features
 
-* ✅ Eigenes WLAN (Access Point): SSID "KORN", Passwort "Chaosfeeder"
+### ⏰ Intelligente Fütterungslogik
+* **Automatischer Zeitplan**: Bis zu 2 Fütterungszeiten täglich
+* **Sicherheitsabstand**: Mindestens 2 Minuten zwischen Fütterungen
+* **Verzögerungsanzeige**: Bei zu häufigen Fütterungsversuchen wird die exakte Wartezeit angezeigt
+* **Erweiterte Laufzeit**: 1–600 Sekunden (10 Minuten) für unterschiedliche Futtermengen
+* **Live-Updates**: Webseite zeigt aktuelle Uhrzeit und letzte Fütterung in Echtzeit
+
+### 📱 Benutzerfreundliche Bedienung
+
+* Eigenes WLAN (Access Point): SSID "KORN", Passwort "Chaosfeeder"
   Eigenes PW kann später im Script gesetzt werden!!
-* ✅ Einfache Handy-Webseite (mobilfreundlich):
-  - ✅ Zwei Fütterungszeiten einstellen
-  - ✅ Zweite Fütterungszeit deaktivieren
-  - ✅ Motor-Laufzeit in Sekunden festlegen (zeitbasiert, unabhängig von Microstep)
-  - ✅ Countdown bis zur nächsten Fütterung
-  - ✅ Button "Jetzt füttern"
-  - ✅ Warn-Button „Blockade lösen (Rechtslauf)“ mit Laufzeit-Eingabe (Standard 2 s; Begrenzung 1–60 s). Nur kurzfristig verwenden!
-  - ✅ Button „Interne Uhr aktualisieren“ (setzt die interne RTC auf die Gerätezeit des Browsers/Clients)
-  - ✅ Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
-  - ✅ 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
-  - ✅ Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
+* Einfache Handy-Webseite (mobilfreundlich):
+  - Zwei Fütterungszeiten einstellen
+  - Zweite Fütterungszeit deaktivieren
+  - Motor-Laufzeit in Sekunden festlegen (1–600 Sekunden = bis zu 10 Minuten)
+  - Countdown bis zur nächsten Fütterung mit Live-Uhr
+  - Button "Jetzt füttern" mit 2-Minuten-Mindestabstand
+  - Intelligente Verzögerungsanzeige: Zeigt exakte Uhrzeit bei Mindestabstand-Verzögerung
+  - Letzte Fütterung wird live aktualisiert (Zeit + Quelle: Manuell/Web/Timer)
+  - Warn-Button „Blockade lösen (Rechtslauf)" mit Laufzeit-Eingabe (Standard 2 s; Begrenzung 1–60 s). Nur kurzfristig verwenden!
+  - Button „Interne Uhr aktualisieren" (setzt die interne RTC auf die Gerätezeit des Browsers/Clients)
+  - Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+  - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
+  - Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
+  - Batteriestatus (CR2032) als Anzeige-Button: Grün=OK, Rot=Bitte CR2032 tauschen (Heuristik: RTC-Zeit + RTC-RAM)
 * ✅ Manuelle Bedienung:
   - ✅ Kurzschluss Pin 10 ↔ 11 als Taster
   - ✅ Sofortige Fütterung unabhängig vom Zeitplan
@@ -90,10 +106,13 @@ Relay:
 * ✅ Stepper-Reset nach jeder Bewegung
 
 > Hinweis: AP-Insellösung (Off-Grid)
-> - KORN stellt ein eigenes WLAN bereit und nutzt im AP-Modus fest die IP 192.168.4.1/24.
+> - KORN stellt ein eigenes WLAN bereit und nutzt im AP-Modus typischerweise 192.168.4.1/24; die tatsächliche IP wird beim Start seriell ausgegeben.
 > - Für die Nutzung einfach mit dem WLAN "KORN" verbinden und im Browser `http://192.168.4.1` öffnen.
 > - Währenddessen besteht in der Regel keine Internetverbindung; das vermeidet Konflikte mit Heimnetzwerken.
 > - Auf Smartphones: __Mobile Daten deaktivieren__ (sonst bevorzugen viele Geräte LTE/5G und die Seite lädt nicht).
+> - Eventuell müssen VPN Verbindungen deaktiviert werden.
+
+
 
 #### 🔐 Zugangsdaten (SSID/Passwort)
 - Standard-SSID: `KORN`
@@ -117,46 +136,48 @@ Hinweise:
 ### 🧰 Standardwerte
 * Fütterungszeit 1: 07:01
 * Fütterungszeit 2: 16:01 (aktiv)
-* Standard-Laufzeit: 5 s (intern 1000 Steps/s → 5000 Steps)
+* Standard-Laufzeit: 5 s (erweitert auf 1–600 s = bis zu 10 Minuten für große Hühnerscharen)
 * Blockadelöser (UI-Default): 2 s (nicht persistent, nur Eingabewert in der Seite)
+* Mindestabstand zwischen Fütterungen: 2 Minuten (Sicherheitsfeature)
+
+## 💾 Persistenz & Batterie
+
+* Konfiguration wird im batteriegepufferten RAM der **DS1302** gespeichert und übersteht Stromausfälle bei intakter **CR2032**.
+* Ist die Batterie leer/fehlend oder werden Daten korrupt, lädt das Gerät **Werkseinstellungen** (Defaults).
+* Heuristischer Batterietest: Batterie gilt als „OK“, wenn die **RTC-Zeit gültig** ist und die **Konfiguration aus RTC‑RAM** geladen wurde. Die Web‑UI zeigt einen Anzeige‑Button (Grün/Rot).
+* Indikatoren in der seriellen Ausgabe: `RTC: OK/--`, `CFG: RAM/DEF`.
 
 ---
 
-### 🖥️ Serieller Monitor (Einstellungen)
+### 🖥️ Serieller Monitor (für Experten)
 - Baudrate: __115200 Baud__
 - Datenbits/Parität/Stoppbits: __8-N-1__ (Standard)
 - Zeilenende: __No line ending__ (keine Eingaben erforderlich)
 - Port: das ACM-Gerät des Boards (z. B. `/dev/ttyACM0`)
 
+## 💡 Was zeigt der serielle Monitor?
 
-## 💡 Typische Serial-Ausgaben
+Der serielle Monitor ist hauptsächlich für Entwickler und Fehlersuche gedacht. Er zeigt:
 
-• SSID/PW und AP-IP zum schnellen Verbinden
-• Datum/Uhrzeit (RTC)
-• Letzte Fütterung (Zeit, Schritte)
-• Nächste Fütterung(en) inkl. Countdown
-• Plan-Status (zweite Zeit aktiv/deaktiv)
-• Motor-Parameter: Schritte (intern aus Sekunden berechnet)
-• RTC/Config-Status (RTC OK/FAIL, Config aus RAM/Defaults)
-• Uptime
+• **WLAN-Zugangsdaten**: SSID "KORN" und Passwort zum Verbinden
+• **Aktuelle Uhrzeit**: Datum und Uhrzeit der internen Uhr
+• **Letzte Fütterung**: Wann zuletzt gefüttert wurde und wie lange der Motor lief
+• **Nächste Fütterung**: Countdown bis zur nächsten automatischen Fütterung
+• **Batteriestatus**: Ob die CR2032-Batterie der Uhr noch funktioniert
+• **Betriebszeit**: Wie lange das Gerät bereits läuft
 
-Ausgabe-Rhythmus:
-- Beim Start: eine vollständige Statuszeile
-- Danach: alle 60 Sekunden eine kompakte Statuszeile
-
-Beispiel (eine Zeile):
-
+**Beispiel einer Statuszeile:**
 ```
-AP:KORN Pw:Chaosfeeder IP:192.168.4.1 | 2025-08-17 18:48 | Last:17:10(5000) | Next1:19:00(00:12) Next2:- [off] | Steps:5000 | RTC:OK CFG:RAM | Up:00:32
+AP:KORN Pw:Chaosfeeder IP:192.168.4.1 | 2025-08-17 18:48 | Last:17:10 | Next1:19:00(00:12) | RTC:OK | Up:00:32
 ```
 
-Legende:
-- AP: SSID, Pw: Passwort, IP: AP-IP des Geräts
-- Last: letzte Fütterung HH:MM (Schritte)
-- Next1/Next2: nächste Fütterungszeit (Countdown MM:SS); „[off]“ = zweite Zeit deaktiviert
-- Steps: `MOTOR_SCHRITTE`
-- RTC: OK/FAIL; CFG: RAM = aus DS1302-RAM geladen, DEFAULT = Fallback-Werte
-- Up: Betriebszeit (hh:mm)
+**Bedeutung:**
+- Mit WLAN "KORN" verbinden, dann Browser auf 192.168.4.1 öffnen
+- Aktuelle Zeit: 18:48 Uhr am 17. August 2025
+- Letzte Fütterung: um 17:10 Uhr
+- Nächste Fütterung: um 19:00 Uhr (in 12 Minuten)
+- Batterie der Uhr: OK
+- Gerät läuft seit 32 Minuten
 
 ---
 
@@ -173,27 +194,42 @@ Die Bauteile der Förderschnecke wurden mittels FreeCAD (LGPL2+, CC-BY-3.0) entw
 
 ---
 
-## 🔧 Wartung & Troubleshooting
+## Wartung & Troubleshooting
 
-### Häufige Probleme
-* **AP ohne Internet**: Im Insellösungs-Modus normal. Browser-Hinweis „kein Internet“ ignorieren oder mobile Daten kurz deaktivieren.
-* **Kein Zugriff auf 192.168.4.1**:
-  - Sicherstellen, dass das Gerät mit „KORN“ verbunden ist (nicht im Heim-WLAN).
-  - Mobile Daten aus, Seite neu laden.
-  - SSID/Passwort in der seriellen Ausgabe prüfen.
-* **IP-Konflikt 192.168.4.0/24**:
-  - Keine parallele Heimnetz-Verbindung im gleichen Subnetz verwenden.
-  - Entweder bewusst nur mit „KORN“ verbinden (Insellösung) oder Heimnetz auf anderes Subnetz umstellen.
-* **AP wird nicht angezeigt**: Gerät neu starten, SSID „KORN“ prüfen, näher an das Gerät herangehen.
-* **Manuelle Fütterung reagiert nicht**: Kurzschluss Pin 10 ↔ 11 sicher herstellen; Pin 10 ist INPUT_PULLUP und muss auf GND gezogen werden.
-* **Motor läuft nicht**: Relais (D8) schaltet 12V? Gemeinsame Masse vorhanden? ENA (D5) aktiviert? DM320T-Versorgung 10–30V geprüft?
+### Häufige Probleme und Lösungen
 
-### 🖲️ Manuelle Fütterung
-Pin 10 und Pin 11 kurz verbinden (z.B. mit Drahtbrücke) → Sofortige Fütterung wird ausgelöst.
+#### Webseite lädt nicht
+* **"Kein Internet" Meldung**: Normal bei Off-Grid-Betrieb - einfach ignorieren
+* **Seite lädt nicht**: 
+  - Mobile Daten am Handy ausschalten
+  - Sicherstellen, dass mit WLAN "KORN" verbunden (nicht Heim-WLAN)
+  - Browser auf `http://192.168.4.1` öffnen
+
+#### WLAN-Probleme  
+* **WLAN "KORN" wird nicht angezeigt**: 
+  - Näher an das Gerät herangehen
+  - Gerät neu starten (Strom aus/ein)
+  - Andere WLAN-Geräte kurz ausschalten
+
+#### Fütterung funktioniert nicht
+* **"Jetzt füttern" reagiert nicht**: 
+  - 2 Minuten seit letzter Fütterung warten
+  - Webseite zeigt dann exakte Wartezeit an
+* **Motor dreht nicht**: 
+  - 12V-Netzteil angeschlossen und eingeschaltet?
+  - Alle Kabel fest verbunden?
+  - Grünes Lämpchen am Arduino leuchtet?
+
+#### Batterie-Probleme
+* **Rote Batterie-Anzeige**: CR2032 in der Uhr tauschen
+* **Einstellungen gehen verloren**: Neue CR2032 einsetzen, dann neu konfigurieren
+
+### Notfall-Fütterung (Hardware-Taster)
+Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit einem Draht verbinden → Sofortige Fütterung wird ausgelöst (umgeht 2-Minuten-Regel).
 
 ---
 
-## 🤖 Entwicklung
+## Entwicklung
 
 Der Code wurde mit Hilfe von **künstlicher Intelligenz** entworfen, optimiert und systematisch verbessert. Das Projekt folgt **Open-Source-Prinzipien** und ist vollständig dokumentiert.
 

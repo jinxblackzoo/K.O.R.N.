@@ -26,3 +26,34 @@ void apInit(const char* ssid, const char* pass) {
   // Explizites Setzen der AP-IP wird von WiFiS3 ggf. nicht unterstützt.
   // Wir loggen sie daher verlässlich, damit die URL eindeutig ist.
 }
+
+static bool lastApWasOk = true;
+
+void apCheckAndReconnect() {
+  // WiFi-Status prüfen
+  int status = WiFi.status();
+  bool apOk = (status == WL_AP_LISTENING || status == WL_AP_CONNECTED);
+  
+  // Nur bei Statuswechsel von OK zu nicht-OK reconnecten
+  if (!apOk && lastApWasOk) {
+    Serial.print(F("WLAN-Verbindung verloren (Status="));
+    Serial.print(status);
+    Serial.println(F(") - Reconnect..."));
+    
+    // AP neu starten
+    WiFi.end();
+    delay(200);
+    
+    int newStatus = WiFi.beginAP("KORN", "Chaosfeeder");
+    delay(500);
+    
+    // Server neu starten
+    server.begin();
+    
+    IPAddress ip = WiFi.localIP();
+    Serial.print(F("AP wiederhergestellt: IP="));
+    Serial.println(ip);
+  }
+  
+  lastApWasOk = apOk;
+}

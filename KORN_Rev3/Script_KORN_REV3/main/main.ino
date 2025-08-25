@@ -13,6 +13,9 @@
  *  - Manuell: D10 (INPUT_PULLUP), D11 (OUTPUT LOW) -> Kurzschluss löst aus
  */
 
+// Vorwärtsdeklaration: nötig, damit Arduino-Präprozessor-Prototypen KConfig kennen
+struct KConfig;
+
 #include <Arduino.h>
 #include <AccelStepper.h>
 #include <WiFiS3.h>
@@ -33,6 +36,19 @@ const bool MOTOR_DIR_CW = false;        // false = CCW (links), true = CW (recht
 
 // Serielle Minimal-Ausgabe Intervall (Sekunden)
 const uint16_t STATUS_INTERVAL_S = 60;
+// Mindestabstand zwischen zwei Fütterungen (Minuten) – schützt vor Doppel-Triggern
+const uint16_t MIN_GAP_MIN = 2;
+// Arming-Window nach Boot: geplante Fütterungen erst nach diesem Zeitfenster erlauben
+const uint32_t ARMING_WINDOW_MS = 60000UL;
+// WLAN-Reconnect Intervall (Millisekunden) - 0 = deaktiviert für Off-Grid AP-Modus
+const uint32_t WIFI_CHECK_INTERVAL_MS = 0UL;
+
+// Quelle der letzten/kommenden Fütterung (für Status/Anzeige)
+const uint8_t SRC_NONE = 0;
+const uint8_t SRC_MANUAL = 1;
+const uint8_t SRC_WEB = 2;
+const uint8_t SRC_SCHED1 = 3;
+const uint8_t SRC_SCHED2 = 4;
 
 // DS1302 Pins (Makuna-Reihenfolge für ThreeWire: DIO, SCLK, CE)
 #define DS1302_CLK 7
@@ -52,17 +68,19 @@ void motorReset();
 bool motorFeed(int steps, bool dirCW);
 
 void apInit(const char* ssid, const char* pass);
+void apCheckAndReconnect();
 void webInit();
 void webHandleClient();
 // RTC-Sync auf Kompilierzeit
 void rtcSyncToCompile();
 
 // Kompakter Status-Snapshot für die Web-UI (RAM-schonend, keine Strings)
-void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM,
+void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM, int &nowS,
                        int &lastH, int &lastM,
                        int &n1H, int &n1M, int &n2H, int &n2M,
                        int &c1H, int &c1M, int &c2H, int &c2M,
-                       bool &a2, int &steps);
+                       bool &a2, int &steps, uint8_t &lastSrc, bool &delayWarning,
+                       int &actualH, int &actualM, int &actualS);
 
 // Sofortfütterung zentral aus main anstoßen (für Web/Hardware)
 void requestImmediateFeed();
@@ -82,24 +100,48 @@ bool batteryLikelyOK();
 // Serielle Minimal-Ausgabe
 // ============================================================================
 static unsigned long lastStatusMs = 0;
+static unsigned long lastWifiCheckMs = 0;
 static int lastFeedHour = -1;     // letzte Fütterung (HH)
 static int lastFeedMinute = -1;   // letzte Fütterung (MM)
+static int lastFeedSecond = -1;   // letzte Fütterung (SS)
 static int lastFeedSteps = -1;    // letzte Fütterung (Schritte)
 static uint8_t lastKnownDay = 0;  // zur Erkennung des Tageswechsels
 static bool fedToday1 = false;    // Marker: Fütterung 1 heute ausgeführt
 static bool fedToday2 = false;    // Marker: Fütterung 2 heute ausgeführt
 static bool feedingInProgress = false; // einfache Reentrancy-Sperre
+static volatile uint8_t nextFeedSrc = SRC_NONE; // vor requestImmediateFeed setzen
+static uint8_t lastFeedSrc = SRC_NONE;          // für Statusanzeige
+// Manuell-Trigger-Entprellung/Hold und Lockout
+static unsigned long manualLowSinceMs = 0;        // Zeitpunkt seit dem D10=LOW ist
+static unsigned long manualLockoutUntilMs = 0;    // bis wann manuelle Trigger ignoriert werden
+static bool manualConsumed = false;               // einmalige Auslösung pro Tastendruck (bis Release)
+// Pending-Flags für geplante Fütterungen, falls sie während einer laufenden Fütterung fällig werden
+static bool pendingSched1 = false;
+static bool pendingSched2 = false;
+// Bootzeit (kann optional genutzt werden, z.B. für Arming-Delays)
+static unsigned long bootMs = 0;
+// Web: asynchrones Feed-Request-Flag (verhindert blockierende HTTP-Antworten)
+static volatile bool webFeedRequested = false;
+// Scheduler-Zustand für sekundengenaue Auslösung
+static int lastNowSec = -1;           // Sekunden des Tages der letzten Prüfung (0..86399)
+// firstSchedCheck entfernt – Catch-up nur via pending
 
 // =========================================================================
 // Konfiguration (Zeiten, Aktiv-Flag, Steps) – Ziel: DS1302-RAM (Persistenz)
 // =========================================================================
+// Web-Helfer: von homepage.ino aufrufen, um asynchrones Feed zu markieren
+void requestFeedFromWebAsync() {
+  if (!feedingInProgress) {
+    webFeedRequested = true;
+  }
+}
 struct KConfig {
   uint16_t magic;       // 0xBEEF als Marker
   uint8_t v;            // Versionsbyte
   uint8_t h1, m1;       // Zeit 1
   uint8_t h2, m2;       // Zeit 2
   uint8_t active2;      // 0/1 zweite Zeit aktiv
-  uint16_t steps;       // Motor-Schritte
+  uint32_t steps;       // Motor-Schritte (erweitert für bis zu 600s Laufzeit)
   uint16_t crc;         // einfache Prüfsumme
 };
 
@@ -118,7 +160,7 @@ static uint16_t cfgChecksum(const KConfig &c) {
   // Sehr einfache Prüfsumme über die payload-Felder (ohne magic, v, crc)
   uint32_t s = 0;
   s += c.h1 + c.m1 + c.h2 + c.m2 + c.active2;
-  s += c.steps & 0xFF; s += (c.steps >> 8) & 0xFF;
+  s += c.steps & 0xFF; s += (c.steps >> 8) & 0xFF; s += (c.steps >> 16) & 0xFF; s += (c.steps >> 24) & 0xFF;
   return (uint16_t)((s & 0xFFFFu) ^ 0xA5A5u);
 }
 
@@ -214,7 +256,7 @@ int cfgGetM2() { return gCfg.m2; }
 bool cfgGetActive2() { return gCfg.active2 != 0; }
 int cfgGetSteps() { return gCfg.steps; }
 
-void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint16_t steps) {
+void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps) {
   // Eingaben begrenzen (Sicherheitsnetz)
   if (h1 > 23) h1 = 23; if (m1 > 59) m1 = 59;
   if (h2 > 23) h2 = 23; if (m2 > 59) m2 = 59;
@@ -271,22 +313,45 @@ static void diffToHM(int nowH, int nowM, int tH, int tM, int &outH, int &outM) {
 }
 
 // Liefert Momentanwerte für Web-UI
-void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM,
+void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM, int &nowS,
                        int &lastH, int &lastM,
                        int &n1H, int &n1M, int &n2H, int &n2M,
                        int &c1H, int &c1M, int &c2H, int &c2M,
-                       bool &a2, int &steps) {
+                       bool &a2, int &steps, uint8_t &lastSrc, bool &delayWarning,
+                       int &actualH, int &actualM, int &actualS) {
   rtcOk = Rtc.IsDateTimeValid();
   lastH = lastFeedHour; lastM = lastFeedMinute;
+  lastSrc = lastFeedSrc;
   a2 = (gCfg.active2 != 0);
   steps = gCfg.steps;
-  nowH = nowM = -1; n1H = n1M = n2H = n2M = -1; c1H = c1M = c2H = c2M = -1;
+  delayWarning = false;
+  actualH = actualM = actualS = -1;
+  nowH = nowM = nowS = -1; n1H = n1M = n2H = n2M = -1; c1H = c1M = c2H = c2M = -1;
   if (rtcOk) {
     RtcDateTime now = Rtc.GetDateTime();
-    nowH = now.Hour(); nowM = now.Minute();
+    nowH = now.Hour(); nowM = now.Minute(); nowS = now.Second();
     computeNextTimes(nowH, nowM, n1H, n1M, n2H, n2M);
     diffToHM(nowH, nowM, n1H, n1M, c1H, c1M);
     diffToHM(nowH, nowM, n2H, n2M, c2H, c2M);
+    
+    // Prüfen ob nächste Fütterung durch 2-Min-Mindestabstand verzögert wird
+    if (lastFeedHour >= 0 && lastFeedMinute >= 0) {
+      int nowSec = nowH * 3600 + nowM * 60 + nowS;
+      int lastSec = lastFeedHour * 3600 + lastFeedMinute * 60 + ((lastFeedSecond >= 0) ? lastFeedSecond : 0);
+      int deltaLastSec = nowSec - lastSec;
+      if (deltaLastSec < 0) deltaLastSec += 24 * 3600; // Mitternacht-Wrap
+      
+      // Wenn letzte Fütterung < 2 Min her und nächste Fütterung < 2 Min entfernt
+      if (deltaLastSec < (int)MIN_GAP_MIN * 60 && c1H == 0 && c1M < 2) {
+        delayWarning = true;
+        // Berechne tatsächliche Ausführungszeit: letzte Fütterung + 2 Minuten
+        int actualSec = lastSec + (int)MIN_GAP_MIN * 60;
+        if (actualSec >= 24 * 3600) actualSec -= 24 * 3600; // Mitternacht-Wrap
+        actualH = actualSec / 3600;
+        actualM = (actualSec / 60) % 60;
+        actualS = actualSec % 60;
+      }
+    }
   }
 }
 
@@ -322,14 +387,30 @@ static void computeNextTimes(int nowH, int nowM, int &n1H, int &n1M, int &n2H, i
   }
 
   // Zweiter nächster Termin (falls vorhanden und aktiv)
-  if (secondIdx >= 0) { n2H = cH[secondIdx]; n2M = cM[secondIdx]; }
-  else {
-    // Falls firstIdx belegt war, zweite Zeit ist der früheste aktive des Folgetags (sofern verschieden)
-    int best = -1;
-    for (int i = 0; i < 2; ++i) if (cActive[i]) {
-      if (best < 0 || cH[i] < cH[best] || (cH[i] == cH[best] && cM[i] < cM[best])) best = i;
+  if (secondIdx >= 0) { 
+    n2H = cH[secondIdx]; n2M = cM[secondIdx]; 
+  }
+  else if (firstIdx >= 0) {
+    // Nur ein Termin heute gefunden -> der andere ist morgen der zweite
+    for (int i = 0; i < 2; ++i) {
+      if (cActive[i] && i != firstIdx) {
+        n2H = cH[i]; n2M = cM[i];
+        break;
+      }
     }
-    if (best >= 0) { n2H = cH[best]; n2M = cM[best]; } else { n2H = n2M = -1; }
+    if (n2H < 0) n2H = n2M = -1; // Fallback falls nur eine Zeit aktiv
+  } else {
+    // Heute nichts mehr -> morgen beide Termine, zweiter ist der spätere
+    int best1 = -1, best2 = -1;
+    for (int i = 0; i < 2; ++i) if (cActive[i]) {
+      if (best1 < 0 || cH[i] < cH[best1] || (cH[i] == cH[best1] && cM[i] < cM[best1])) {
+        best2 = best1;
+        best1 = i;
+      } else if (best2 < 0 || cH[i] < cH[best2] || (cH[i] == cH[best2] && cM[i] < cM[best2])) {
+        best2 = i;
+      }
+    }
+    if (best2 >= 0) { n2H = cH[best2]; n2M = cM[best2]; } else { n2H = n2M = -1; }
   }
 }
 
@@ -429,6 +510,7 @@ void setup() {
 
   printStatusStartup();
   lastStatusMs = millis();
+  bootMs = lastStatusMs;
 
   // Tageswechsel-Erkennung initialisieren
   if (Rtc.IsDateTimeValid()) {
@@ -441,6 +523,15 @@ void setup() {
 }
 
 void loop() {
+  // WLAN-Status prüfen und ggf. reconnecten (nur wenn aktiviert)
+  if (WIFI_CHECK_INTERVAL_MS > 0) {
+    unsigned long nowMs = millis();
+    if (nowMs - lastWifiCheckMs >= WIFI_CHECK_INTERVAL_MS) {
+      apCheckAndReconnect();
+      lastWifiCheckMs = nowMs;
+    }
+  }
+
   // Webrequests bedienen
   webHandleClient();
 
@@ -452,43 +543,212 @@ void loop() {
     lastStatusMs = now;
   }
 
-  // Hardware-Trigger: Kurzschluss 10↔11 löst Fütterung aus (einfach entprellt)
-  static unsigned long lastTriggerMs = 0;
-  static bool armed = true; // nur einmal pro Press
-  int trig = digitalRead(MANUAL_TRIGGER_PIN); // HIGH=Ruhe, LOW=kurzgeschlossen
-  if (trig == LOW && armed && (now - lastTriggerMs > 200UL)) {
-    // Sofortfütterung zentral auslösen
+  // Web-Feed-Request asynchron bedienen (antwortet HTTP sofort; Feed läuft hier)
+  if (webFeedRequested && !feedingInProgress) {
+    webFeedRequested = false;
+    Serial.println(F("TRIG:WEB"));
+    nextFeedSrc = SRC_WEB;
     requestImmediateFeed();
-    armed = false;
-    lastTriggerMs = now;
-  } else if (trig == HIGH && (now - lastTriggerMs > 300UL)) {
-    armed = true;
+  }
+
+  // Hardware-Trigger: Kurzschluss 10↔11 löst aus – robust mit 150ms Hold + 1s Lockout, one-shot bis Release
+  int trig = digitalRead(MANUAL_TRIGGER_PIN); // HIGH=Ruhe (Pullup), LOW=kurzgeschlossen
+  if (trig == LOW) {
+    if (manualLowSinceMs == 0) manualLowSinceMs = now; // Start der Low-Phase
+    // Nur auslösen, wenn stabil ≥150ms LOW, kein Lockout aktiv und noch nicht verbraucht
+    if (!manualConsumed && (now - manualLowSinceMs) >= 150UL && now >= manualLockoutUntilMs && !feedingInProgress) {
+      Serial.println(F("TRIG:MANUAL"));
+      nextFeedSrc = SRC_MANUAL;
+      requestImmediateFeed();
+      manualLockoutUntilMs = now + 1000UL; // 1s Lockout
+      manualConsumed = true;               // bis Release gesperrt
+      // lowSince nicht zurücksetzen – verhindert Mehrfachauslösung solange gedrückt
+    }
+  } else {
+    // HIGH = Ruhe
+    manualLowSinceMs = 0;
+    manualConsumed = false; // Release: nächster Druck erlaubt
   }
 
   // Geplante Fütterungen und Tagesreset
   if (Rtc.IsDateTimeValid()) {
     RtcDateTime nowRtc = Rtc.GetDateTime();
+    int nowSec = nowRtc.Hour() * 3600 + nowRtc.Minute() * 60 + nowRtc.Second();
+    if (lastNowSec < 0) lastNowSec = nowSec; // Initialisierung beim ersten Durchlauf
 
     // Tageswechsel erkennen → Marker zurücksetzen
     if (lastKnownDay != nowRtc.Day()) {
       fedToday1 = false;
       fedToday2 = false;
-      lastKnownDay = nowRtc.Day();
+      pendingSched1 = false;
+      pendingSched2 = false;
+      // Hinweis: lastNowSec NICHT zurücksetzen – Crossing-Logik ist wrap-aware
     }
+    lastKnownDay = nowRtc.Day();
 
-    // Nur auslösen, wenn nicht bereits in einer Fütterung
-    if (!feedingInProgress) {
-      // Fütterung 1 nach gCfg
-      if (!fedToday1 && nowRtc.Hour() == gCfg.h1 && nowRtc.Minute() == gCfg.m1) {
-        requestImmediateFeed();
-        fedToday1 = true;
+    // Zielzeiten (Sekunden und Minuten)
+    int nowMin = nowRtc.Hour() * 60 + nowRtc.Minute();
+    int t1 = ((int)gCfg.h1) * 60 + (int)gCfg.m1;
+    int t2 = ((int)gCfg.h2) * 60 + (int)gCfg.m2;
+    int t1Sec = ((int)gCfg.h1) * 3600 + ((int)gCfg.m1) * 60; // :00 Sekunden
+    int t2Sec = ((int)gCfg.h2) * 3600 + ((int)gCfg.m2) * 60; // :00 Sekunden
+    // Crossing-Detektion mit Wrap-around über Mitternacht:
+    // trifft zu, wenn t im Intervall (lastNowSec, nowSec] liegt – auch wenn nowSec < lastNowSec
+    auto crossed = [](int lastS, int nowS, int tS) {
+      if (lastS <= nowS) {
+        return (tS > lastS) && (tS <= nowS);
+      } else { // Wrap: z.B. 86390 -> 5
+        return (tS > lastS) || (tS <= nowS);
       }
-      // Fütterung 2 (falls aktiv) nach gCfg
-      if (gCfg.active2 && !fedToday2 && nowRtc.Hour() == gCfg.h2 && nowRtc.Minute() == gCfg.m2) {
-        requestImmediateFeed();
-        fedToday2 = true;
+    };
+    bool crossed1 = crossed(lastNowSec, nowSec, t1Sec);
+    bool crossed2 = crossed(lastNowSec, nowSec, t2Sec);
+    bool armed = (millis() - bootMs) >= ARMING_WINDOW_MS;
+
+    if (!feedingInProgress && armed) {
+      // Mindestabstand zur letzten Fütterung (sekundengenau, wrap-aware)
+      int deltaLastSec = 999999; // groß = "kein Limit"
+      if (lastFeedHour >= 0 && lastFeedMinute >= 0) {
+        int lastS = lastFeedHour * 3600 + lastFeedMinute * 60 + ((lastFeedSecond >= 0) ? lastFeedSecond : 0);
+        deltaLastSec = nowSec - lastS; if (deltaLastSec < 0) deltaLastSec += 24 * 3600;
       }
+
+      bool didTrigger = false;
+      bool trig1 = false;
+      bool trig2 = false;
+
+      // Termin 1: Crossing erkannt UND aktuell exakt :00 Sekunden -> auslösen oder defer
+      if (!fedToday1 && crossed1 && (nowSec % 60) == 0) {
+        if (deltaLastSec >= (int)MIN_GAP_MIN * 60) {
+          // Log mit Sollzeit & aktueller RTC-Zeit
+          int curH = nowSec / 3600; int curM = (nowSec / 60) % 60; int curS = nowSec % 60;
+          Serial.print(F("TRIG:SCHED1@"));
+          if (curH < 10) Serial.print('0'); Serial.print(curH); Serial.print(':');
+          if (curM < 10) Serial.print('0'); Serial.print(curM); Serial.print(':');
+          if (curS < 10) Serial.print('0'); Serial.println(curS);
+          nextFeedSrc = SRC_SCHED1;
+          requestImmediateFeed();
+          fedToday1 = true;
+          pendingSched1 = false;
+          didTrigger = true;
+          trig1 = true;
+        } else {
+          pendingSched1 = true; // nach Gap nachholen
+          int curH = nowSec / 3600; int curM = (nowSec / 60) % 60; int curS = nowSec % 60;
+          Serial.print(F("DEF:SCHED1(gap)@"));
+          if (curH < 10) Serial.print('0'); Serial.print(curH); Serial.print(':');
+          if (curM < 10) Serial.print('0'); Serial.print(curM); Serial.print(':');
+          if (curS < 10) Serial.print('0'); Serial.println(curS);
+        }
+      } else if (!fedToday1 && crossed1) {
+        // Crossing erkannt, aber nicht bei :00 -> als pending merken
+        pendingSched1 = true;
+      }
+
+      // Nur eine geplante Fütterung pro Loop-Iteration durchführen
+      if (!didTrigger && gCfg.active2 && !fedToday2) {
+        // Mindestabstand erneut prüfen (nach evtl. Feed1 wurde lastFeed* aktualisiert)
+        int d2Sec = 999999;
+        if (lastFeedHour >= 0 && lastFeedMinute >= 0) {
+          int lastS = lastFeedHour * 3600 + lastFeedMinute * 60 + ((lastFeedSecond >= 0) ? lastFeedSecond : 0);
+          d2Sec = nowSec - lastS; if (d2Sec < 0) d2Sec += 24 * 3600;
+        }
+        if (crossed2 && (nowSec % 60) == 0) {
+          if (d2Sec >= (int)MIN_GAP_MIN * 60) {
+            int curH = nowSec / 3600; int curM = (nowSec / 60) % 60; int curS = nowSec % 60;
+            Serial.print(F("TRIG:SCHED2@"));
+            if (curH < 10) Serial.print('0'); Serial.print(curH); Serial.print(':');
+            if (curM < 10) Serial.print('0'); Serial.print(curM); Serial.print(':');
+            if (curS < 10) Serial.print('0'); Serial.println(curS);
+            nextFeedSrc = SRC_SCHED2;
+            requestImmediateFeed();
+            fedToday2 = true;
+            pendingSched2 = false;
+            didTrigger = true;
+            trig2 = true;
+          } else {
+            pendingSched2 = true; // nach Gap nachholen
+            int curH = nowSec / 3600; int curM = (nowSec / 60) % 60; int curS = nowSec % 60;
+            Serial.print(F("DEF:SCHED2(gap)@"));
+            if (curH < 10) Serial.print('0'); Serial.print(curH); Serial.print(':');
+            if (curM < 10) Serial.print('0'); Serial.print(curM); Serial.print(':');
+            if (curS < 10) Serial.print('0'); Serial.println(curS);
+          }
+        } else if (gCfg.active2 && !fedToday2 && crossed2) {
+          // Crossing erkannt, aber nicht bei :00 -> als pending merken
+          pendingSched2 = true;
+        }
+      }
+
+      // Nachholer für pending Termine (auch wenn :00 verpasst wurde)
+      if (!didTrigger) {
+        if (pendingSched1 && !fedToday1 && deltaLastSec >= (int)MIN_GAP_MIN * 60) {
+          Serial.println(F("TRIG:SCHED1(pending)"));
+          nextFeedSrc = SRC_SCHED1;
+          requestImmediateFeed();
+          fedToday1 = true;
+          pendingSched1 = false;
+          didTrigger = true;
+        }
+      }
+      if (!didTrigger) {
+        if (pendingSched2 && gCfg.active2 && !fedToday2) {
+          // Mindestabstand prüfen (sekundengenau)
+          int dSec = 999999;
+          if (lastFeedHour >= 0 && lastFeedMinute >= 0) {
+            int lastS = lastFeedHour * 3600 + lastFeedMinute * 60 + ((lastFeedSecond >= 0) ? lastFeedSecond : 0);
+            dSec = nowSec - lastS; if (dSec < 0) dSec += 24 * 3600;
+          }
+          if (dSec >= (int)MIN_GAP_MIN * 60) {
+            Serial.println(F("TRIG:SCHED2(pending)"));
+            nextFeedSrc = SRC_SCHED2;
+            requestImmediateFeed();
+            fedToday2 = true;
+            pendingSched2 = false;
+          }
+        }
+      }
+      
+      // Direkter Fallback: Wenn Crossing vor >5s war und noch nicht gefüttert, sofort triggern
+      if (!didTrigger && !fedToday1 && crossed1 && deltaLastSec >= (int)MIN_GAP_MIN * 60) {
+        int secsSinceCrossing = nowSec - t1Sec; if (secsSinceCrossing < 0) secsSinceCrossing += 24 * 3600;
+        if (secsSinceCrossing > 0 && secsSinceCrossing <= 10) {
+          Serial.println(F("TRIG:SCHED1(late)"));
+          nextFeedSrc = SRC_SCHED1;
+          requestImmediateFeed();
+          fedToday1 = true;
+          pendingSched1 = false;
+          didTrigger = true;
+        }
+      }
+      if (!didTrigger && gCfg.active2 && !fedToday2 && crossed2) {
+        int dSec = 999999;
+        if (lastFeedHour >= 0 && lastFeedMinute >= 0) {
+          int lastS = lastFeedHour * 3600 + lastFeedMinute * 60 + ((lastFeedSecond >= 0) ? lastFeedSecond : 0);
+          dSec = nowSec - lastS; if (dSec < 0) dSec += 24 * 3600;
+        }
+        if (dSec >= (int)MIN_GAP_MIN * 60) {
+          int secsSinceCrossing = nowSec - t2Sec; if (secsSinceCrossing < 0) secsSinceCrossing += 24 * 3600;
+          if (secsSinceCrossing > 0 && secsSinceCrossing <= 10) {
+            Serial.println(F("TRIG:SCHED2(late)"));
+            nextFeedSrc = SRC_SCHED2;
+            requestImmediateFeed();
+            fedToday2 = true;
+            pendingSched2 = false;
+          }
+        }
+      }
+    } else if (feedingInProgress) {
+      // Während Fütterung merken wir Crossings in diesem Intervall als pending
+      if (!fedToday1 && crossed1) pendingSched1 = true;
+      if (gCfg.active2 && !fedToday2 && crossed2) pendingSched2 = true;
+    } else if (!armed) {
+      // Noch nicht armed: Crossings als pending merken, damit direkt nach Arming ausgelöst werden
+      if (!fedToday1 && crossed1) pendingSched1 = true;
+      if (gCfg.active2 && !fedToday2 && crossed2) pendingSched2 = true;
     }
+    // Aktuelle Sekunde als Referenz für das nächste Intervall behalten
+    lastNowSec = nowSec;
   }
 }
 
@@ -507,10 +767,15 @@ void requestImmediateFeed() {
     RtcDateTime t = Rtc.GetDateTime();
     lastFeedHour = t.Hour();
     lastFeedMinute = t.Minute();
+    lastFeedSecond = t.Second();
     lastKnownDay = t.Day(); // sicherstellen
   }
   // Letzte Schritte merken
   lastFeedSteps = gCfg.steps;
+
+  // Quelle der letzten Fütterung merken und zurücksetzen
+  lastFeedSrc = nextFeedSrc;
+  nextFeedSrc = SRC_NONE;
 
   // Optional: Stepper-Reset-Hook
   motorReset();

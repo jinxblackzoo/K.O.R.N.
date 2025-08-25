@@ -55,6 +55,8 @@ void motorInit() {
   stepper.setMaxSpeed(4000.0);
   stepper.setAcceleration(8000.0);
   stepper.setMinPulseWidth(8);      // Min. Pulsbreite in µs (DM320T fordert ≥7.5µs)
+  // Startposition definieren
+  stepper.setCurrentPosition(0);
 }
 
 void motorEnable(bool on) {
@@ -62,7 +64,12 @@ void motorEnable(bool on) {
 }
 
 void motorReset() {
+  // Sicherer Stopp und definierter Zustand
   stepper.stop();
+  stepper.setSpeed(0);
+  stepper.setCurrentPosition(0);
+  relaySet(false);
+  motorEnable(false);
 }
 
 // Führt eine Fütterung aus (blocking Platzhalter). Rückgabe true bei Erfolg.
@@ -79,11 +86,20 @@ bool motorFeed(int steps, bool dirCW) {
   motorEnable(true);
   delay(50); // Enable-Setup-Zeit
   // Zeitbasierte konstante Geschwindigkeit:  FEED_STEPS_PER_SEC
-  long target = steps * (dirCW ? 1 : -1);
-  stepper.move(target);
-  stepper.setSpeed(dirCW ? (float)FEED_STEPS_PER_SEC : -(float)FEED_STEPS_PER_SEC);
+  long delta = (long)steps * (dirCW ? 1 : -1);
+  // Absolute Zielposition relativ zur aktuellen Position
+  long targetPos = stepper.currentPosition() + delta;
+  stepper.moveTo(targetPos);
+  stepper.setSpeed(delta >= 0 ? (float)FEED_STEPS_PER_SEC : -(float)FEED_STEPS_PER_SEC);
+  // Watchdog: erwartete Laufzeit + Reserve (ms)
+  unsigned long sps = (unsigned long)(FEED_STEPS_PER_SEC > 0 ? FEED_STEPS_PER_SEC : 1000);
+  unsigned long expectedMs = (unsigned long)(((unsigned long)abs(steps) * 1000UL) / (sps ? sps : 1UL));
+  unsigned long deadline = millis() + expectedMs + 4000UL; // 4s Reserve
   while (stepper.distanceToGo() != 0) {
     stepper.runSpeedToPosition();
+    if ((long)(millis() - deadline) > 0) {
+      break; // Sicherheitsabbruch
+    }
   }
   // 5) Nachlauf
   delay(200);
