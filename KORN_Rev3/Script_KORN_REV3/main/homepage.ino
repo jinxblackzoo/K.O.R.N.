@@ -6,7 +6,8 @@ extern WiFiServer server; // aus ap.ino
 extern const int MOTOR_SCHRITTE; // aus main.ino (legacy)
 extern const int FEED_STEPS_PER_SEC; // feste Schrittfrequenz für zeitbasierte Fütterung
 extern const bool MOTOR_DIR_CW;  // aus main.ino
-bool motorFeed(int steps, bool dirCW); // aus motor.ino
+// Motorsteuerung aus motor.ino
+bool motorFeed(int steps, bool dirCW);
 // Status-Snapshot aus main.ino (inkl. lastSrc)
 void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM, int &nowS,
                        int &lastH, int &lastM,
@@ -22,8 +23,6 @@ void requestFeedFromWebAsync();
 void rtcSyncToCompile();
 // Neue API: RTC auf vom Client übergebene Gerätezeit setzen
 void rtcSet(uint16_t y, uint8_t m, uint8_t d, uint8_t H, uint8_t M, uint8_t S);
-// Motorsteuerung aus motor.ino (für Jog)
-bool motorFeed(int steps, bool dirCW);
 // Konfig-API aus main.ino für Webformular
 int cfgGetH1();
 int cfgGetM1();
@@ -34,6 +33,8 @@ int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
 // Batterie-Indikator aus main.ino (softwarebasierte Heuristik)
 bool batteryLikelyOK();
+// Hilfsfunktion formatHM() aus main.ino
+void formatHM(char* buf, size_t len, int h, int m);
 
 // RAM-schonendes Streaming der Header/Footer direkt aus Flash
 static void sendHeader(WiFiClient &client) {
@@ -145,10 +146,10 @@ static void handleRoot(WiFiClient &client) {
   if (a2 && n2H>=0 && n2M>=0) { 
     formatHM(buf, sizeof(buf), n2H, n2M);
     client.print(buf);
-    client.print(F(" (in "));
+    client.print(F(" (in <span id=\"c2\">"));
     formatHM(buf, sizeof(buf), c2H, c2M);
     client.print(buf);
-    client.print(F(")"));
+    client.print(F("</span>)"));
   } else if (a2) {
     client.print(F("--:--"));
   } else {
@@ -203,7 +204,9 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<p><small><strong>Hinweise:</strong><br>"));
   client.print(F("• Mindestabstand zwischen Fütterungen: 2 Minuten<br>"));
   client.print(F("• Max. Laufzeit: 10 Minuten (thermische Belastung NEMA17)<br>"));
-  client.print(F("• Empfohlen für große Scharen: 2-5 Minuten</small></p>"));
+  client.print(F("• Mittlere Futteraufnahme: 110-130g/Henne/Tag "));
+  client.print(F("(Quelle: <a href=\"https://www.huehner-info.de/infos/futter_bestandteile3.htm\" target=\"_blank\" rel=\"noopener\">huehner-info.de</a>)"));
+  client.print(F("</small></p>"));
   client.print(F("<button type=\"submit\">Speichern</button></form>"));
   client.print(F("<hr><form method=\"POST\" action=\"/feed\" onsubmit=\"(function(f){var b=f.querySelector('button'); if(b){b.disabled=true;b.textContent='Wird ausgelöst…';}})(this)\"><button>Sofort füttern</button></form>"));
   // Zusätzlicher Trenner zwischen Sofort füttern und Blockadelöser
@@ -213,14 +216,9 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<div style=\"padding:8px;border:1px solid #a00;background:#fee;color:#a00;font-weight:bold;border-radius:4px\">"));
   client.print(F("Achtung: Rechtslauf nur zum kurzfristigen Lösen von Blockaden verwenden. Nicht dauerhaft rückwärts drehen lassen!"));
   client.print(F("</div>"));
-  client.print(F("<form id=\"unclog\" method=\"POST\" action=\"/jogcw\" style=\"margin-top:6px\" data-sps=\""));
-  client.print(FEED_STEPS_PER_SEC);
-  client.print(F("\">"));
-  client.print(F("<label>Laufzeit (Sekunden): <input type=\"number\" name=\"sec2\" min=\"1\" max=\"600\" value=\""));
-  client.print(2);
-  client.print(F("\" style=\"width:6em\"></label>"));
-  client.print(F("<input type=\"hidden\" name=\"n\" value=\"200\">"));
-  client.print(F("<button id=\"unclogbtn\" type=\"button\" style=\"margin-left:12px\" onclick=\"(function(){var f=document.getElementById('unclog');var b=document.getElementById('unclogbtn');var sps=parseInt(f.getAttribute('data-sps'))||1000;var sec=parseInt(f.sec2.value)||1; if(sec<1)sec=1; if(sec>60)sec=60; var steps=sec*sps; if(steps<10)steps=10; if(steps>20000)steps=20000; f.n.value=steps; if(!confirm('Warnung: Rechtslauf nur zum Lösen von Blockaden. Fortfahren?'))return; b.disabled=true;setTimeout(function(){b.disabled=false;},1500);f.submit();})()\">Blockade lösen (Rechtslauf)</button>"));
+  client.print(F("<form id=\"unclog\" method=\"POST\" action=\"/jogcw\" style=\"margin-top:6px\">"));
+  client.print(F("<label>Laufzeit (Sekunden): <input type=\"number\" name=\"sec2\" min=\"1\" max=\"60\" value=\"2\" style=\"width:6em\"></label>"));
+  client.print(F("<button type=\"submit\" style=\"margin-left:12px\">Blockade lösen (Rechtslauf)</button>"));
   client.print(F("</form>"));
   client.print(F("</div>"));
   // Trenner vor Zeit-Update
@@ -244,7 +242,8 @@ static void handleRoot(WiFiClient &client) {
     client.print(F("<button type=\"button\" disabled style=\"background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.95;cursor:default\">Bitte CR2032 tauschen</button>"));
   }
   client.print(F("</div>"));
-  // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
+  // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns (#c1, #c2) sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
+  // c1 = Countdown zur nächsten Fütterung, c2 = Countdown zur übernächsten Fütterung
   client.print(F("<script>"));
   client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}var lastUpdate=0;function updateStatus(){var xhr=new XMLHttpRequest();xhr.open('GET','/status',true);xhr.onreadystatechange=function(){if(xhr.readyState===4&&xhr.status===200){try{var data=JSON.parse(xhr.responseText);var lf=document.getElementById('lastfeed');if(lf&&data.lastH>=0&&data.lastM>=0){var src='';switch(data.lastSrc){case 1:src=' [Manuell]';break;case 2:src=' [Web]';break;case 3:src=' [Fütterung 1]';break;case 4:src=' [Fütterung 2]';break;}lf.textContent=pad(data.lastH)+':'+pad(data.lastM)+src;lf.setAttribute('data-h',data.lastH);lf.setAttribute('data-m',data.lastM);lf.setAttribute('data-src',data.lastSrc);}}catch(e){}}};xhr.send();}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));var s=parseInt(el.getAttribute('data-s'));var hasRtc=!(isNaN(h)||isNaN(m)||isNaN(s)||h<0||m<0||s<0);if(!hasRtc){var t=new Date();h=t.getHours();m=t.getMinutes();s=t.getSeconds();}var base=(h*3600+m*60+s)%86400;var t0=Date.now();function render(){var elapsed=Math.floor((Date.now()-t0)/1000);var nowSec=(base+elapsed)%86400;var H=Math.floor(nowSec/3600),R=nowSec%3600,M=Math.floor(R/60),S=R%60;el.textContent=pad(H)+':'+pad(M)+':'+pad(S);var n1h=parseInt(el.getAttribute('data-n1h')),n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0)diff+=86400;var c1=document.getElementById('c1');if(c1)c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h')),n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0)diff2+=86400;var c2=document.getElementById('c2');if(c2)c2.textContent=fmtHMS(diff2);}if(elapsed%10===0&&elapsed!==lastUpdate){updateStatus();lastUpdate=elapsed;}}setInterval(render,1000);render();}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));
   client.print(F("</script>"));
@@ -386,7 +385,7 @@ void webHandleClient() {
     client.print(F("HTTP/1.1 303 See Other\r\n"));
     client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
   } else if (reqLine.startsWith("POST /jogcw") || reqLine.startsWith("POST /jogccw")) {
-    // Body lesen, optionales 'n' (Schritte) parsen, Default 200
+    // Body lesen und Sekunden-Parameter auslesen
     String body;
     if (contentLength < 0) contentLength = 0;
     body.reserve((unsigned)contentLength);
@@ -397,13 +396,22 @@ void webHandleClient() {
       }
       delay(1);
     }
-    String sn;
-    int steps = 200;
-    if (kvFind(body, "n", sn)) {
-      uint32_t v = toUInt32(sn, 200);
-      if (v >= 1 && v <= 600000) steps = (int)v;  // Max. 600s * 1000 Steps/s
+    String sSec;
+    int seconds = 2;  // Default 2 Sekunden
+    if (kvFind(body, "sec2", sSec)) {
+      uint32_t v = toUInt32(sSec, 2);
+      if (v >= 1 && v <= 60) seconds = (int)v;  // 1-60 Sekunden
     }
+    // Sekunden in Steps umrechnen (bei 1000 steps/sec)
+    int steps = seconds * FEED_STEPS_PER_SEC;
     bool dirCW = reqLine.startsWith("POST /jogcw");
+    
+    Serial.print(F("Blockade lösen: "));
+    Serial.print(seconds);
+    Serial.print(F(" Sekunden = "));
+    Serial.print(steps);
+    Serial.println(F(" Steps"));
+    
     // Ausführen (blockierend, wie feed), nutzt Relais/Buzzer aus motorFeed
     motorFeed(steps, dirCW);
     // Redirect zurück

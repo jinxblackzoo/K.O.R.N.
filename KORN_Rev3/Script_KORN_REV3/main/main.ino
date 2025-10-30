@@ -11,12 +11,28 @@
  *  - Motor:  PUL=D2, DIR=D3, ENA=D5, Relais=D8
  *  - Buzzer: D6 aktiv (HIGH=Ton)
  *  - Manuell: D10 (INPUT_PULLUP), D11 (OUTPUT LOW) -> Kurzschluss löst aus
+ *
+ * Benötigte Bibliotheken (Arduino IDE Library Manager):
+ *  - "Rtc by Makuna" Version 2.4.0+     (für DS1302 RTC)
+ *  - "AccelStepper" Version 1.61+       (für Schrittmotor-Steuerung)
+ *  - WiFiS3 (vorinstalliert)             (für Arduino UNO R4 WiFi)
+ *  - EEPROM (vorinstalliert)             (für Backup-Speicherung)
+ *  - avr/wdt.h (nur AVR, vorinstalliert) (für Watchdog, nicht auf UNO R4)
+ *
+ * Board: Arduino UNO R4 WiFi
+ * Board Package: Arduino UNO R4 Boards (arduino:renesas_uno)
  */
 
 // Vorwärtsdeklaration: nötig, damit Arduino-Präprozessor-Prototypen KConfig kennen
 struct KConfig;
 
 #include <Arduino.h>
+#include <EEPROM.h>     // EEPROM-Backup für Konfiguration
+// Watchdog nur für AVR-basierte Arduinos (UNO R4 nutzt anderen Mechanismus)
+#ifdef __AVR__
+  #include <avr/wdt.h>
+  #define WATCHDOG_ENABLED
+#endif
 #include <AccelStepper.h>
 #include <WiFiS3.h>
 #include <ThreeWire.h>      // Makuna: 3-Draht-Bus für DS1302
@@ -82,6 +98,9 @@ void getStatusSnapshot(bool &rtcOk, int &nowH, int &nowM, int &nowS,
                        bool &a2, int &steps, uint8_t &lastSrc, bool &delayWarning,
                        int &actualH, int &actualM, int &actualS);
 
+// Hilfsfunktion zur Berechnung der nächsten Fütterungszeiten
+static void computeNextTimes(int nowH, int nowM, int &n1H, int &n1M, int &n2H, int &n2M);
+
 // Sofortfütterung zentral aus main anstoßen (für Web/Hardware)
 void requestImmediateFeed();
 
@@ -92,7 +111,7 @@ int cfgGetH2();
 int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
-void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint16_t steps);
+void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
 // Batterie-Indikator (softwarebasiert): RTC-Zeit gültig und Config aus RTC-RAM
 bool batteryLikelyOK();
 
@@ -148,6 +167,10 @@ struct KConfig {
 static KConfig gCfg;         // aktuelle Konfiguration im RAM
 static bool gCfgValid = false; // Anzeige für Statuszeile CFG:OK/--
 static bool gCfgFromRam = false; // Herkunft: true=aus RTC-RAM, false=Defaults
+static bool gCfgFromEeprom = false; // Herkunft: true=aus EEPROM geladen, false=nicht aus EEPROM
+
+// EEPROM-Speicheradresse für Konfiguration
+#define EEPROM_CFG_ADDR 0
 
 bool batteryLikelyOK() {
   // Heuristik: Backup-Batterie ist wahrscheinlich ok, wenn
@@ -205,6 +228,30 @@ static void cfgApplyToRuntime() {
   // Für einfache Integration verwenden wir gCfg direkt in Berechnungen.
 }
 
+// Vorwärtsdeklaration für cfgSaveToRtcRam (wird in cfgLoadFromRtcRam verwendet)
+static void cfgSaveToRtcRam();
+
+// EEPROM-Funktionen für Backup-Persistenz
+static bool cfgLoadFromEEPROM() {
+  KConfig backup;
+  EEPROM.get(EEPROM_CFG_ADDR, backup);
+  if (backup.magic == 0xBEEF) {
+    uint16_t c = cfgChecksum(backup);
+    if (c == backup.crc) {
+      gCfg = backup;
+      gCfgValid = true;
+      gCfgFromEeprom = true;
+      return true;
+    }
+  }
+  return false;
+}
+
+static void cfgSaveToEEPROM() {
+  gCfg.crc = cfgChecksum(gCfg);
+  EEPROM.put(EEPROM_CFG_ADDR, gCfg);
+}
+
 // Persistenz in DS1302-RAM – Makuna-API: wird separat verifiziert.
 // Platzhalter, damit Web-Konfig bereits funktioniert (CFG-Status zeigt Gültigkeit an).
 static void cfgLoadFromRtcRam() {
@@ -223,15 +270,24 @@ static void cfgLoadFromRtcRam() {
           gCfg = tmp;
           gCfgValid = true;
           gCfgFromRam = true;
+          gCfgFromEeprom = false; // RTC-RAM hat Priorität
           ok = true;
         }
       }
     }
   }
   if (!ok) {
-    // Fallback auf Defaults
-    cfgApplyDefaults();
-    gCfgFromRam = false;
+    // Fallback auf EEPROM prüfen
+    if (cfgLoadFromEEPROM()) {
+      // EEPROM-Config gefunden - schreibe sie auch ins RTC-RAM
+      cfgSaveToRtcRam();
+      Serial.println(F("Config aus EEPROM wiederhergestellt"));
+    } else {
+      // Fallback auf Defaults
+      cfgApplyDefaults();
+      gCfgFromRam = false;
+      gCfgFromEeprom = false;
+    }
   }
 }
 
@@ -246,6 +302,8 @@ static void cfgSaveToRtcRam() {
   }
   gCfgValid = true;
   gCfgFromRam = true; // nach erfolgreichem Schreiben gilt Quelle=RAM
+  // Parallel in EEPROM sichern
+  cfgSaveToEEPROM();
 }
 
 // Getter/Setter-Impl.
@@ -283,7 +341,7 @@ static void printStatusStartup() {
     snprintf(timeBuf, sizeof(timeBuf), "%02u:%02u", now.Hour(), now.Minute());
     rtcStat = "OK";
   }
-  const char* cfgStat = gCfgValid ? "OK" : "--";
+  const char* cfgStat = gCfgFromRam ? "RAM" : (gCfgFromEeprom ? "EEPROM" : "DEF");
   // IP dynamisch ermitteln
   IPAddress ip = WiFi.localIP();
   char ipBuf[24];
@@ -291,12 +349,12 @@ static void printStatusStartup() {
   char line[180];
   snprintf(line, sizeof(line),
            "AP:KORN Pw:Chaosfeeder IP:%s | TIME:%s | Last:--:--(----) | Next1:--:--(--:--) Next2:-- [--] | Steps:%d | RTC:%s CFG:%s | Up:00:00",
-           ipBuf, timeBuf, (int)gCfg.steps, rtcStat, (gCfgFromRam ? "RAM" : "DEF"));
+           ipBuf, timeBuf, (int)gCfg.steps, rtcStat, cfgStat);
   Serial.println(line);
 }
 
 // Hilfsfunktionen für Zeitformatierung und Next/Last
-static void formatHM(char* buf, size_t len, int h, int m) {
+void formatHM(char* buf, size_t len, int h, int m) {
   if (h < 0 || m < 0) { strncpy(buf, "--:--", len); return; }
   snprintf(buf, len, "%02d:%02d", h, m);
 }
@@ -452,7 +510,7 @@ static void printStatusPeriodic() {
       strncpy(n2Bracket, "off", sizeof(n2Bracket));
     }
   }
-  const char* cfgStat = gCfgFromRam ? "RAM" : "DEF";
+  const char* cfgStat = gCfgFromRam ? "RAM" : (gCfgFromEeprom ? "EEPROM" : "DEF");
   char upBuf[6];
   snprintf(upBuf, sizeof(upBuf), "%02u:%02u", upH, upM);
   // IP dynamisch ermitteln
@@ -496,6 +554,14 @@ static void rtcInitAndMaybeSet() {
 void setup() {
   Serial.begin(115200);
   while (!Serial) { ; }
+  
+  // Watchdog TEMPORÄR DEAKTIVIERT ZUM DEBUGGEN
+  #ifdef WATCHDOG_ENABLED
+    // wdt_enable(WDTO_8S);  // AUSKOMMENTIERT ZUM TESTEN
+    Serial.println(F("Watchdog: DEAKTIVIERT (Debug-Modus)"));
+  #else
+    Serial.println(F("Watchdog: nicht verfügbar (UNO R4)"));
+  #endif
 
   rtcInitAndMaybeSet();
 
@@ -523,6 +589,11 @@ void setup() {
 }
 
 void loop() {
+  // Watchdog zurücksetzen (verhindert Reset bei normaler Operation)
+  #ifdef WATCHDOG_ENABLED
+    wdt_reset();
+  #endif
+  
   // WLAN-Status prüfen und ggf. reconnecten (nur wenn aktiviert)
   if (WIFI_CHECK_INTERVAL_MS > 0) {
     unsigned long nowMs = millis();

@@ -26,7 +26,7 @@ Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellunge
 ### 🔌 Verkabelung
 ```
 DS1302RTC:
-├── VCC     → Arduino 3.3V (oder 5V)
+├── VCC     → Arduino 5V ⚠️ WICHTIG: NICHT 3,3V!
 ├── GND     → Arduino GND
 ├── CLK     → Arduino Pin 7
 └── DAT     → Arduino Pin 9
@@ -65,11 +65,21 @@ Relay:
 ```
 
 #### Hinweise zur Verdrahtung
-* DS1302: CR2032-Stützbatterie einsetzen; gemeinsame Masse (GND) mit Arduino und Peripherie sicherstellen.
-* DM320T (Common-Cathode): PUL−, DIR−, ENA− an Arduino GND; OPTO ungenutzt wie gezeigt.
-* Manueller Trigger: Pin 11 als permanentes LOW (OUTPUT), Pin 10 als INPUT_PULLUP; Kurzschluss 10 ↔ 11 löst sofort aus.
-* Relais trennt nur die Plusleitung: 12V+ → COM → NO → +Vdc des DM320T.
-* ENA-Logik: ENA=HIGH aktiviert den Treiber; ENA=LOW deaktiviert.
+* **DS1302**: 
+  - ⚠️ **KRITISCH**: VCC MUSS an 5V! Mit 3,3V funktioniert die RTC nicht und verursacht Bootloops!
+  - CR2032-Stützbatterie einsetzen (~5 Jahre Lebensdauer)
+  - Gemeinsame Masse (GND) mit Arduino und Peripherie sicherstellen
+* **DM320T** (Common-Cathode): 
+  - PUL−, DIR−, ENA− an Arduino GND
+  - OPTO nicht am Arduino verwenden -> Muss an +5V Versorgung
+* **Relais**: 
+  - HW-482: Typischerweise ACTIVE-HIGH (HIGH=EIN, LOW=AUS)
+  - Relais trennt nur die Plusleitung: 12V+ → COM → NO → +Vdc des DM320T
+* **Manueller Trigger**: 
+  - Pin 11 als permanentes LOW (OUTPUT)
+  - Pin 10 als INPUT_PULLUP
+  - Kurzschluss 10 ↔ 11 löst sofort aus (mit 150ms Entprellung)
+* **ENA-Logik**: ENA=HIGH aktiviert den Treiber; ENA=LOW deaktiviert
 
 ## 🚀 Software-Features
 
@@ -79,6 +89,16 @@ Relay:
 * **Verzögerungsanzeige**: Bei zu häufigen Fütterungsversuchen wird die exakte Wartezeit angezeigt
 * **Erweiterte Laufzeit**: 1–600 Sekunden (10 Minuten) für unterschiedliche Futtermengen
 * **Live-Updates**: Webseite zeigt aktuelle Uhrzeit und letzte Fütterung in Echtzeit
+
+### 💾 Konfigurationsspeicherung & Datensicherheit
+* **Doppelte Datensicherung**: Konfiguration wird parallel in RTC-RAM UND EEPROM gespeichert
+* **Automatisches Backup**: Bei jedem Speichervorgang wird EEPROM aktualisiert
+* **Batterie-Ausfallschutz**: Bei CR2032-Ausfall wird Config aus EEPROM wiederhergestellt
+* **Status-Anzeige**: 
+  - **CFG:RAM** = Aus RTC-RAM geladen (normal)
+  - **CFG:EEPROM** = Aus EEPROM wiederhergestellt (nach Batterieausfall)
+  - **CFG:DEF** = Standard-Werte (erster Start)
+* **EEPROM-Lebensdauer**: ~100.000 Schreibzyklen (bei normaler Nutzung jahrelang haltbar)
 
 ### 📱 Benutzerfreundliche Bedienung
 
@@ -111,6 +131,7 @@ Relay:
 > - Währenddessen besteht in der Regel keine Internetverbindung; das vermeidet Konflikte mit Heimnetzwerken.
 > - Auf Smartphones: __Mobile Daten deaktivieren__ (sonst bevorzugen viele Geräte LTE/5G und die Seite lädt nicht).
 > - Eventuell müssen VPN Verbindungen deaktiviert werden.
+> - Während der Motor läuft, wird die Seite nicht neu geladen, sondern bleibt quasi im Lademodus "stecken". Dies ist keine Fehlfunktion, sondern eine bewußte Designentscheidung um den Code simpel zu halten. Das Arduino arbeitet seine Aufgaben sequenziell (Eine nach der anderen) ab. Sobald der Motor stoppt, lädt die Seite wieder. 
 
 
 
@@ -229,6 +250,42 @@ Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit ein
 
 ---
 
+## ⚡ Stromverbrauch & Solarbetrieb
+
+Für den autarken Off-Grid-Betrieb mit Solarstrom sind folgende Verbrauchswerte relevant:
+
+### Gemessene Stromaufnahme bei 12V
+- **Ruhemodus** (Motor aus, Relais aus, Arduino an): **0,104 A** (1,25 W)
+- **Aktiver Betrieb** (Motor läuft, DM320T aktiv): **0,7 A** (8,4 W)
+
+### DM320T Konfiguration (aktuell)
+Die Messwerte basieren auf folgender DIP-Schalter-Einstellung der Variante A:
+- SW1=ON, SW2=ON, SW3=OFF, SW4=ON, SW5=ON, SW6=ON
+- Entspricht: 1,3A Peak (0,92A RMS), Microstep 2
+
+### Dimensionierung für Solarbetrieb
+**Täglicher Energiebedarf (Beispielrechnung):**
+- Ruhemodus: 23,5h × 1,25W = 29,4 Wh
+- Fütterungen: 2× 10s × 8,4W = 0,05 Wh
+- **Gesamt: ~30 Wh/Tag**
+
+**Empfohlene Solaranlage:**
+- Solarpanel: 20-30W (je nach Standort/Jahreszeit)
+- Akku: 12V/7-12Ah (84-144 Wh Kapazität)
+- Laderegler: 12V PWM/MPPT für entsprechende Panel-Leistung
+
+**Beispiel-Konfiguration (getestet):**
+- Solarpanel: 130W (deutlich überdimensioniert → sehr zuverlässig)
+- Akku: 12V/12Ah Sealed Lead Acid (144 Wh nominal, ~72 Wh nutzbar = 2-3 Tage Autonomie)
+- Laderegler: entsprechend 130W Panel dimensioniert
+
+**Hinweise:**
+- Bei längeren Fütterungszeiten (>30s) entsprechend höher dimensionieren
+- Wintermonate: Größeres Panel oder zusätzliche Akkukapazität einplanen
+- Standby-Verbrauch dominiert den Energiebedarf deutlich
+
+---
+
 ## Entwicklung
 
 Der Code wurde mit Hilfe von **künstlicher Intelligenz** entworfen, optimiert und systematisch verbessert. Das Projekt folgt **Open-Source-Prinzipien** und ist vollständig dokumentiert.
@@ -258,18 +315,24 @@ Varianten (konservativ → kräftiger), jeweils mit Microstep 2 für robustes Dr
     - SW1=ON, SW2=ON, SW3=OFF
   - Microstep 2 (400 Steps/Rev):
     - SW4=ON, SW5=ON, SW6=ON
+  - **Gemessener Verbrauch bei 12V:** 0,7A aktiv, 0,104A Standby
+  - **Ideal für Solarbetrieb:** Minimaler Stromverbrauch, ~30 Wh/Tag
 
 - __Variante B (konservativ, guter TQ)__
   - Dynamischer Strom: 1.6A Peak (1.13A RMS)
     - SW1=OFF, SW2=ON, SW3=OFF
   - Microstep 2 (400 Steps/Rev):
     - SW4=ON, SW5=ON, SW6=ON
+  - **Gemessener Verbrauch bei 12V:** 0,920A aktiv, 0,105A Standby
+  - **Solarbetrieb:** Höherer Verbrauch, ~37 Wh/Tag (23% mehr als Variante A)
 
 - __Variante C (mehr TQ, prüfe Netzteil/Temperatur)__
   - Dynamischer Strom: 1.9A Peak (1.34A RMS)
     - SW1=ON, SW2=OFF, SW3=OFF
   - Microstep 2 (400 Steps/Rev):
     - SW4=ON, SW5=ON, SW6=ON
+  - **Gemessener Verbrauch bei 12V:** 1,125A aktiv, 0,105A Standby
+  - **Solarbetrieb:** Höchster Verbrauch, ~43 Wh/Tag (43% mehr als Variante A)
 
 Hinweise:
 - DM320T max. 2.2A Peak – nicht empfohlen bei 2A-Netzteilgrenze.
