@@ -198,7 +198,7 @@
           <mxGeometry x="110" y="145" width="120" height="50" as="geometry" />
         </mxCell>
         <mxCell id="RDBmDsrhAJkuP8qxYfzd-88" value="" style="group;rotation=-90;strokeWidth=2;" parent="1" vertex="1" connectable="0">
-          <mxGeometry x="110" y="-10" width="280" height="340" as="geometry" />
+          <mxGeometry x="110" y="-10" width="290" height="340" as="geometry" />
         </mxCell>
         <mxCell id="RDBmDsrhAJkuP8qxYfzd-89" value="" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" parent="RDBmDsrhAJkuP8qxYfzd-88" vertex="1">
           <mxGeometry x="40" y="-40" width="200" height="340" as="geometry" />
@@ -271,8 +271,8 @@
         <mxCell id="RDBmDsrhAJkuP8qxYfzd-105" value="PUL" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;" parent="RDBmDsrhAJkuP8qxYfzd-88" vertex="1">
           <mxGeometry x="260" y="260" width="80" height="20" as="geometry" />
         </mxCell>
-        <mxCell id="RDBmDsrhAJkuP8qxYfzd-106" value="DM320T Stepper Treiber" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;rotation=0;" parent="RDBmDsrhAJkuP8qxYfzd-88" vertex="1">
-          <mxGeometry x="85" y="115" width="90" height="30" as="geometry" />
+        <mxCell id="RDBmDsrhAJkuP8qxYfzd-106" value="DM320T Stepper Treiber&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;Info: Micoswitch Schalterstellungen in der Readme.md unter&lt;/div&gt;&lt;div&gt;&amp;nbsp;&lt;span style=&quot;color: rgb(38, 139, 210); font-weight: bold; background-color: rgb(0, 43, 54); font-family: &amp;quot;Droid Sans Mono&amp;quot;, &amp;quot;monospace&amp;quot;, monospace; font-size: 14px; white-space: pre;&quot;&gt;DM320T DIP‑Schalter (Strom/Microstep)&lt;/span&gt;&lt;/div&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;rotation=0;" parent="RDBmDsrhAJkuP8qxYfzd-88" vertex="1">
+          <mxGeometry x="-7.5" y="60" width="297.5" height="30" as="geometry" />
         </mxCell>
         <mxCell id="RDBmDsrhAJkuP8qxYfzd-152" value="On" style="rounded=0;whiteSpace=wrap;html=1;rotation=-90;fillColor=#cdeb8b;strokeColor=#36393d;" parent="RDBmDsrhAJkuP8qxYfzd-88" vertex="1">
           <mxGeometry x="82.5" y="192.5" width="55" height="20" as="geometry" />

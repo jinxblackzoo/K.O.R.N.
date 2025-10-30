@@ -73,7 +73,9 @@ Relay:
   - PUL−, DIR−, ENA− an Arduino GND
   - OPTO nicht am Arduino verwenden -> Muss an +5V Versorgung
 * **Relais**: 
-  - HW-482: Typischerweise ACTIVE-HIGH (HIGH=EIN, LOW=AUS)
+  - HW-482: Kann ACTIVE-HIGH oder ACTIVE-LOW sein (je nach Modul-Variante)
+  - **Test:** LED am Modul leuchtet bei HIGH = ACTIVE-HIGH, bei LOW = ACTIVE-LOW
+  - Im Code anpassbar: `RELAY_ACTIVE_HIGH` in `motor.ino` (Standard: `true`)
   - Relais trennt nur die Plusleitung: 12V+ → COM → NO → +Vdc des DM320T
 * **Manueller Trigger**: 
   - Pin 11 als permanentes LOW (OUTPUT)
@@ -255,8 +257,9 @@ Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit ein
 Für den autarken Off-Grid-Betrieb mit Solarstrom sind folgende Verbrauchswerte relevant:
 
 ### Gemessene Stromaufnahme bei 12V
-- **Ruhemodus** (Motor aus, Relais aus, Arduino an): **0,104 A** (1,25 W)
-- **Aktiver Betrieb** (Motor läuft, DM320T aktiv): **0,7 A** (8,4 W)
+- **Standby** (Motor aus, Relais aus, Arduino an): **0,093 A** (1,116 W)
+- **Aktiv ohne Last** (Motor läuft, DM320T aktiv, ohne Futter): **0,86 A** (10,32 W)
+- **Aktiv mit Last** (Motor läuft, DM320T aktiv, mit Futter): **1,3 A** (15,6 W)
 
 ### DM320T Konfiguration (aktuell)
 Die Messwerte basieren auf folgender DIP-Schalter-Einstellung der Variante A:
@@ -264,10 +267,13 @@ Die Messwerte basieren auf folgender DIP-Schalter-Einstellung der Variante A:
 - Entspricht: 1,3A Peak (0,92A RMS), Microstep 2
 
 ### Dimensionierung für Solarbetrieb
-**Täglicher Energiebedarf (Beispielrechnung):**
-- Ruhemodus: 23,5h × 1,25W = 29,4 Wh
-- Fütterungen: 2× 10s × 8,4W = 0,05 Wh
-- **Gesamt: ~30 Wh/Tag**
+
+**Täglicher Energiebedarf (Beispielrechnung bei 3 Fütterungen à 10s MIT Futter):**
+- Standby: 23,992h × 0,093A = 2,231 Ah/Tag (26,8 Wh/Tag)
+- Fütterungen: 3× 10s × 1,3A = 0,011 Ah/Tag (0,13 Wh/Tag)
+- **Gesamt: ~2,24 Ah/Tag (26,9 Wh/Tag)**
+
+**Hinweis:** Standby-Verbrauch dominiert (>99%)! Selbst mit Futterlast spielt die Fütterungszeit kaum eine Rolle.
 
 **Empfohlene Solaranlage:**
 - Solarpanel: 20-30W (je nach Standort/Jahreszeit)
@@ -276,13 +282,23 @@ Die Messwerte basieren auf folgender DIP-Schalter-Einstellung der Variante A:
 
 **Beispiel-Konfiguration (getestet):**
 - Solarpanel: 130W (deutlich überdimensioniert → sehr zuverlässig)
-- Akku: 12V/12Ah Sealed Lead Acid (144 Wh nominal, ~72 Wh nutzbar = 2-3 Tage Autonomie)
+- Akku: 12V/12Ah Sealed Lead Acid (144 Wh nominal, ~72 Wh nutzbar)
 - Laderegler: entsprechend 130W Panel dimensioniert
 
+### Batterielaufzeit ohne Solar-Nachladung
+
+**12V 12Ah Blei-Akku (SLA/AGM):**
+- Nutzbare Kapazität: ~50% (um Lebensdauer zu erhalten) = 6 Ah
+- Bei 3 Fütterungen/Tag (à 10s): **2,7 Tage** (≈ 65 Stunden)
+- Bei längeren Fütterungen (3× 60s): **2,6 Tage** (≈ 62 Stunden)
+
+**Wichtig:** Die Fütterungsdauer hat kaum Einfluss auf die Gesamtlaufzeit, da der Standby-Verbrauch dominiert (>99% der Energie).
+
 **Hinweise:**
-- Bei längeren Fütterungszeiten (>30s) entsprechend höher dimensionieren
+- Blei-Akkus: Nicht unter 50% Entladung betreiben (verkürzt Lebensdauer drastisch)
 - Wintermonate: Größeres Panel oder zusätzliche Akkukapazität einplanen
-- Standby-Verbrauch dominiert den Energiebedarf deutlich
+- Sicherheitsreserve: Mind. 20% Buffer einrechnen
+- Alternative: LiFePO4-Akkus bieten ~80% nutzbare Kapazität (≈4 Tage Laufzeit), sind aber teurer
 
 ---
 
