@@ -22,8 +22,10 @@ void requestFeedFromWebAsync();
 // NTP-Status aus main.ino
 bool ntpIsSynced();
 // WLAN-Konfig speichern aus wifi_client.ino
-void wifiCredSave(const char* ssid, const char* pass);
+void wifiCredSave(const char* ssid, const char* pass, const char* admin_pass);
 bool wifiIsSetupMode();
+bool wifiCredHasAdminPass();
+bool wifiCredCheckAdminPass(const char* input);
 // Konfig-API aus main.ino für Webformular
 int cfgGetH1();
 int cfgGetM1();
@@ -92,6 +94,136 @@ void webInit() {
   // NOP – Server wird in wifiInit() gestartet
 }
 
+// Aktuelles Admin-Passwort (nur waehrend einer Request gueltig)
+// Wird von webHandleClient() nach Auth-Check gesetzt, von handleRoot() zum
+// Einbetten in Formulare und Links genutzt.
+static String gCurrentAuthPass = "";
+// Gecachte Versionen (pro Request einmal berechnet) – reduziert Heap-Allokationen
+static String gCurrentAuthPassHtml = "";
+static String gCurrentAuthPassUrl = "";
+
+// HTML-Attribut-Escaping (verhindert XSS bei exotischen Zeichen im Passwort)
+static String htmlEscape(const String &s) {
+  String out;
+  out.reserve(s.length() + 16);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    switch (c) {
+      case '&':  out += "&amp;"; break;
+      case '<':  out += "&lt;"; break;
+      case '>':  out += "&gt;"; break;
+      case '"':  out += "&quot;"; break;
+      case '\'': out += "&#39;"; break;
+      default:   out += c; break;
+    }
+  }
+  return out;
+}
+
+// URL-Encoding für Query-Strings (minimal: nur problematische Zeichen)
+static String urlEncode(const String &s) {
+  String out;
+  out.reserve(s.length() * 2);
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += c;
+    } else {
+      char hex[4];
+      snprintf(hex, sizeof(hex), "%%%02X", (unsigned char)c);
+      out += hex;
+    }
+  }
+  return out;
+}
+
+// Sendet ein verstecktes ap-Feld in einem Formular, damit der Login persistiert
+// Nutzt gecachte HTML-escape-Variante (pro Request einmal berechnet)
+static void sendAuthHidden(WiFiClient &client) {
+  if (gCurrentAuthPassHtml.length() == 0) return;
+  client.print(F("<input type=\"hidden\" name=\"ap\" value=\""));
+  client.print(gCurrentAuthPassHtml);
+  client.print(F("\">"));
+}
+
+// Liefert "?ap=..." Suffix fuer Redirects/Links (oder leer) – nutzt gecachte URL-Variante
+static String authQuerySuffix() {
+  if (gCurrentAuthPassUrl.length() == 0) return "";
+  return String("?ap=") + gCurrentAuthPassUrl;
+}
+
+// URL-Decode (für %XX Sequenzen aus Query-String)
+static String urlDecode(const String &s) {
+  String out;
+  out.reserve(s.length());
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (c == '+') {
+      out += ' ';
+    } else if (c == '%' && i + 2 < s.length()) {
+      char hex[3] = { s[i+1], s[i+2], 0 };
+      out += (char)strtol(hex, nullptr, 16);
+      i += 2;
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+// Extrahiert Admin-Passwort aus Query-String (?ap=...) oder Body (URL-decodiert)
+static String extractAdminPass(const String &reqLine, const String &body) {
+  // Prüfe Query-String
+  int q = reqLine.indexOf("?");
+  if (q >= 0) {
+    int ap = reqLine.indexOf("ap=", q);
+    if (ap >= 0) {
+      ap += 3;  // Länge von "ap="
+      int end = reqLine.indexOf('&', ap);
+      if (end < 0) end = reqLine.indexOf(' ', ap);
+      if (end < 0) end = reqLine.length();
+      return urlDecode(reqLine.substring(ap, end));
+    }
+  }
+  // Prüfe Body (für POST-Requests)
+  if (body.length() > 0) {
+    String ap;
+    if (kvFind(body, "ap", ap)) return urlDecode(ap);
+  }
+  return "";
+}
+
+// Zeigt Login-Seite wenn Admin-Passwort gesetzt und nicht korrekt übergeben
+// Gibt true zurück wenn Zugriff erlaubt, false wenn Login-Seite gesendet wurde
+static bool requireAuth(WiFiClient &client, const String &reqLine, const String &body) {
+  if (!wifiCredHasAdminPass()) return true;  // kein Schutz aktiv
+  String input = extractAdminPass(reqLine, body);
+  if (wifiCredCheckAdminPass(input.c_str())) return true;  // Passwort korrekt oder leer
+  // Login-Seite anzeigen
+  client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"));
+  client.print(F("<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\">"));
+  client.print(F("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"));
+  client.print(F("<title>K.O.R.N. – Login</title>"));
+  client.print(F("<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;margin:32px 16px;text-align:center;background:#f5f5f5}"));
+  client.print(F(".card{background:#fff;border-radius:12px;padding:32px 24px;box-shadow:0 2px 8px rgba(0,0,0,0.1);max-width:400px;margin:0 auto}"));
+  client.print(F("input{width:100%;font-size:20px;margin:12px 0;padding:16px;border:2px solid #ddd;border-radius:8px;box-sizing:border-box}"));
+  client.print(F("button{width:100%;padding:18px;font-size:18px;font-weight:600;border:none;border-radius:8px;background:#1976d2;color:#fff;cursor:pointer}"));
+  client.print(F("h1{font-size:1.5rem;margin:12px 0}"));
+  client.print(F(".error{color:#c62828;margin:12px 0}"));
+  client.print(F("</style></head><body>"));
+  client.print(F("<div class=\"card\">"));
+  client.print(F("<h1>🔒 K.O.R.N. geschützt</h1>"));
+  if (input.length() > 0) {
+    client.print(F("<div class=\"error\">Falsches Passwort</div>"));
+  }
+  client.print(F("<form method=\"GET\" action=\"/\">"));
+  client.print(F("<input type=\"password\" name=\"ap\" placeholder=\"Admin-Passwort\" required autofocus>"));
+  client.print(F("<button type=\"submit\">Anmelden</button>"));
+  client.print(F("</form></div></body></html>"));
+  return false;
+}
+
 static void handleRoot(WiFiClient &client) {
   // Einfache Status-/Konfig-Seite mit Formular (RAM-schonend: gestreamt, F()-Strings)
   // Auto-Redirect zu /setup wenn im Einrichtungs-AP-Modus (nutzerfreundlich für Handy-Einrichtung)
@@ -122,6 +254,9 @@ static void handleRoot(WiFiClient &client) {
     client.print(F("<form method=\"POST\" action=\"/wifisetup\">"));
     client.print(F("<label>WLAN-Name (SSID):<input type=\"text\" name=\"ssid\" autocomplete=\"off\" placeholder=\"MeinHeimnetz\" required></label>"));
     client.print(F("<label>Passwort:<input type=\"password\" name=\"pass\" autocomplete=\"off\" placeholder=\"WLAN-Passwort (min. 8 Zeichen)\" minlength=\"8\" maxlength=\"63\" required></label>"));
+    client.print(F("<hr style=\"margin:16px 0;border-color:#ddd\">"));
+    client.print(F("<label>🔒 Admin-Passwort (optional):<input type=\"password\" name=\"admin_pass\" autocomplete=\"off\" placeholder=\"Web-UI schützen (leer lassen = kein Schutz)\" minlength=\"4\" maxlength=\"32\"></label>"));
+    client.print(F("<div style=\"font-size:13px;color:#666;margin:-8px 0 12px 0\">Falls gesetzt, wird bei jedem Zugriff auf KORN nach diesem Passwort gefragt.</div>"));
     client.print(F("<button type=\"submit\">💾 Speichern & Verbinden</button>"));
     client.print(F("</form>"));
     client.print(F("<div class=\"warn\">⚠️ <strong>Nur WPA2!</strong> Der Arduino unterstützt kein WPA3. Bei Verbindungsproblemen im Router auf WPA2 umstellen.</div>"));
@@ -238,6 +373,7 @@ static void handleRoot(WiFiClient &client) {
 
   client.print(F("<h2>Konfiguration</h2>"));
   client.print(F("<form method=\"POST\" action=\"/save\" autocomplete=\"off\" onsubmit=\"(function(f){var b=f.querySelector('button[type=submit]'); if(b){b.disabled=true;b.textContent='Speichere…';}})(this)\">"));
+  sendAuthHidden(client);
 
   client.print(F("<label>Fütterung 1: <input type=\"number\" name=\"h1\" min=\"0\" max=\"23\" inputmode=\"numeric\" pattern=\"[0-9]*\" enterkeyhint=\"done\" value=\""));
   client.print(cfgGetH1());
@@ -275,7 +411,9 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<div class=\"info-box\">"));
   client.print(F("<strong>ℹ️ Hinweis:</strong> Während der Motor läuft, bleibt die Seite im Lademodus – das ist normal. Sobald der Motor stoppt, lädt sie wieder."));
   client.print(F("</div>"));
-  client.print(F("<form method=\"POST\" action=\"/feed\" onsubmit=\"(function(f){var b=f.querySelector('button'); if(b){b.disabled=true;b.textContent='Wird ausgelöst…';}})(this)\"><button>Sofort füttern</button></form>"));
+  client.print(F("<form method=\"POST\" action=\"/feed\" onsubmit=\"(function(f){var b=f.querySelector('button'); if(b){b.disabled=true;b.textContent='Wird ausgelöst…';}})(this)\">"));
+  sendAuthHidden(client);
+  client.print(F("<button>Sofort füttern</button></form>"));
   // Zusätzlicher Trenner zwischen Sofort füttern und Blockadelöser
   client.print(F("<hr>"));
   // Blockadelöser: separater Rechtslauf mit Warnung, ohne Speicherung
@@ -284,6 +422,7 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<strong>⚠️ Achtung:</strong> Rechtslauf nur zum kurzfristigen Lösen von Blockaden verwenden. Nicht dauerhaft rückwärts drehen lassen!"));
   client.print(F("</div>"));
   client.print(F("<form id=\"unclog\" method=\"POST\" action=\"/jogcw\" style=\"margin-top:6px\">"));
+  sendAuthHidden(client);
   client.print(F("<label>Laufzeit (Sekunden): <input type=\"number\" name=\"sec2\" min=\"1\" max=\"60\" value=\"2\" style=\"width:6em\"></label>"));
   client.print(F("<button type=\"submit\" style=\"margin-left:12px\">Blockade lösen (Rechtslauf)</button>"));
   client.print(F("</form>"));
@@ -301,13 +440,20 @@ static void handleRoot(WiFiClient &client) {
   // Factory Reset Button (unter NTP-Status)
   client.print(F("<div style=\"margin-top:12px\">"));
   client.print(F("<form method=\"POST\" action=\"/reset\" onsubmit=\"return confirm('Wirklich alle Einstellungen löschen? WLAN-Zugangsdaten und Konfiguration werden zurückgesetzt.');\">"));
+  sendAuthHidden(client);
   client.print(F("<button type=\"submit\" style=\"background:#c62828;color:#fff;border:none;padding:8px 12px;border-radius:4px;font-size:14px;cursor:pointer\">🗑️ Auf Werkseinstellungen zurücksetzen</button>"));
   client.print(F("</form>"));
   client.print(F("</div>"));
   // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns (#c1, #c2) sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
   // c1 = Countdown zur nächsten Fütterung, c2 = Countdown zur übernächsten Fütterung
   client.print(F("<script>"));
-  client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}var lastUpdate=0;function updateStatus(){var xhr=new XMLHttpRequest();xhr.open('GET','/status',true);xhr.onreadystatechange=function(){if(xhr.readyState===4&&xhr.status===200){try{var data=JSON.parse(xhr.responseText);var lf=document.getElementById('lastfeed');if(lf&&data.lastH>=0&&data.lastM>=0){var src='';switch(data.lastSrc){case 1:src=' [Manuell]';break;case 2:src=' [Web]';break;case 3:src=' [Fütterung 1]';break;case 4:src=' [Fütterung 2]';break;}lf.textContent=pad(data.lastH)+':'+pad(data.lastM)+src;lf.setAttribute('data-h',data.lastH);lf.setAttribute('data-m',data.lastM);lf.setAttribute('data-src',data.lastSrc);}}catch(e){}}};xhr.send();}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));var s=parseInt(el.getAttribute('data-s'));var hasRtc=!(isNaN(h)||isNaN(m)||isNaN(s)||h<0||m<0||s<0);if(!hasRtc){var t=new Date();h=t.getHours();m=t.getMinutes();s=t.getSeconds();}var base=(h*3600+m*60+s)%86400;var t0=Date.now();function render(){var elapsed=Math.floor((Date.now()-t0)/1000);var nowSec=(base+elapsed)%86400;var H=Math.floor(nowSec/3600),R=nowSec%3600,M=Math.floor(R/60),S=R%60;el.textContent=pad(H)+':'+pad(M)+':'+pad(S);var n1h=parseInt(el.getAttribute('data-n1h')),n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0)diff+=86400;var c1=document.getElementById('c1');if(c1)c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h')),n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0)diff2+=86400;var c2=document.getElementById('c2');if(c2)c2.textContent=fmtHMS(diff2);}if(elapsed%10===0&&elapsed!==lastUpdate){updateStatus();lastUpdate=elapsed;}}setInterval(render,1000);render();}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));
+  if (gCurrentAuthPassUrl.length() > 0) {
+    // URL-encoded ablegen, damit JS-Sonderzeichen nicht ausbrechen koennen
+    client.print(F("window.__ap=decodeURIComponent('"));
+    client.print(gCurrentAuthPassUrl);
+    client.print(F("');"));
+  }
+  client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}var lastUpdate=0;function updateStatus(){var xhr=new XMLHttpRequest();xhr.open('GET','/status'+(window.__ap?('?ap='+encodeURIComponent(window.__ap)):''),true);xhr.onreadystatechange=function(){if(xhr.readyState===4&&xhr.status===200){try{var data=JSON.parse(xhr.responseText);var lf=document.getElementById('lastfeed');if(lf&&data.lastH>=0&&data.lastM>=0){var src='';switch(data.lastSrc){case 1:src=' [Manuell]';break;case 2:src=' [Web]';break;case 3:src=' [Fütterung 1]';break;case 4:src=' [Fütterung 2]';break;}lf.textContent=pad(data.lastH)+':'+pad(data.lastM)+src;lf.setAttribute('data-h',data.lastH);lf.setAttribute('data-m',data.lastM);lf.setAttribute('data-src',data.lastSrc);}}catch(e){}}};xhr.send();}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));var s=parseInt(el.getAttribute('data-s'));var hasRtc=!(isNaN(h)||isNaN(m)||isNaN(s)||h<0||m<0||s<0);if(!hasRtc){var t=new Date();h=t.getHours();m=t.getMinutes();s=t.getSeconds();}var base=(h*3600+m*60+s)%86400;var t0=Date.now();function render(){var elapsed=Math.floor((Date.now()-t0)/1000);var nowSec=(base+elapsed)%86400;var H=Math.floor(nowSec/3600),R=nowSec%3600,M=Math.floor(R/60),S=R%60;el.textContent=pad(H)+':'+pad(M)+':'+pad(S);var n1h=parseInt(el.getAttribute('data-n1h')),n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0)diff+=86400;var c1=document.getElementById('c1');if(c1)c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h')),n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0)diff2+=86400;var c2=document.getElementById('c2');if(c2)c2.textContent=fmtHMS(diff2);}if(elapsed%10===0&&elapsed!==lastUpdate){updateStatus();lastUpdate=elapsed;}}setInterval(render,1000);render();}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));
   client.print(F("</script>"));
   sendFooter(client);
 }
@@ -334,19 +480,27 @@ static void handleFeed(WiFiClient &client) {
   // Sofortfütterung asynchron markieren und sofort redirecten
   requestFeedFromWebAsync();
   client.print(F("HTTP/1.1 303 See Other\r\n"));
-  client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
+  client.print(F("Location: /"));
+  client.print(authQuerySuffix());
+  client.print(F("\r\nConnection: close\r\n\r\n"));
 }
 
 // Sehr einfache URL-Form-Parser für application/x-www-form-urlencoded
+// WICHTIG: Volles URL-Decoding (vorher nur "+" und "%3A") – sonst werden
+// WLAN-Passwörter mit Sonderzeichen (&, =, %, +, etc.) falsch gespeichert.
 static bool kvFind(const String &body, const String &key, String &out) {
-  int p = body.indexOf(key + "=");
+  // Suche nach "key=" entweder am Anfang oder nach einem "&"
+  String needle = key + "=";
+  int p = body.indexOf(needle);
+  // Sicherheit: muss am Anfang oder nach "&" stehen, sonst Substring-Match (z.B. "ap" in "lastap")
+  while (p > 0 && body.charAt(p - 1) != '&') {
+    p = body.indexOf(needle, p + 1);
+  }
   if (p < 0) return false;
-  p += key.length() + 1;
+  p += needle.length();
   int e = body.indexOf('&', p);
   if (e < 0) e = body.length();
-  out = body.substring(p, e);
-  out.replace("+", " "); // minimal
-  out.replace("%3A", ":"); // minimal decode für :
+  out = urlDecode(body.substring(p, e));
   return true;
 }
 
@@ -385,7 +539,22 @@ static void handleSave(WiFiClient &client, const String &body) {
 
   // 303 Redirect zurück auf Startseite (verhindert doppeltes Absenden)
   client.print(F("HTTP/1.1 303 See Other\r\n"));
-  client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
+  client.print(F("Location: /"));
+  client.print(authQuerySuffix());
+  client.print(F("\r\nConnection: close\r\n\r\n"));
+}
+
+// Extrahiert Pfad aus Request-Line (ohne Query-String)
+// "GET /save?x=1 HTTP/1.1" → "/save"
+static String extractPath(const String &reqLine) {
+  int spStart = reqLine.indexOf(' ');
+  if (spStart < 0) return "";
+  int spEnd = reqLine.indexOf(' ', spStart + 1);
+  if (spEnd < 0) spEnd = reqLine.length();
+  String url = reqLine.substring(spStart + 1, spEnd);
+  int q = url.indexOf('?');
+  if (q >= 0) url = url.substring(0, q);
+  return url;
 }
 
 void webHandleClient() {
@@ -393,20 +562,23 @@ void webHandleClient() {
   if (!client) return;
 
   // Request-Zeile
+  client.setTimeout(500);  // schneller Abbruch bei langsamen Clients
   String reqLine = client.readStringUntil('\n');
   reqLine.trim();
-  // Header lesen: Content-Length extrahieren, bis Leerzeile
+  // Header lesen: Content-Length extrahieren, bis Leerzeile (max. 500ms)
   int contentLength = -1;
   unsigned long t0 = millis();
-  while (client.connected()) {
+  while (client.connected() && (millis() - t0) < 500UL) {
     String h = client.readStringUntil('\n');
-    if (h.length() == 0) { if (millis()-t0 > 1500UL) break; else continue; }
+    if (h.length() == 0) continue;
     h.trim();
     if (h.length() == 0) break; // leere Zeile = Ende Header
     if (h.startsWith("Content-Length:")) {
       String v = h.substring(15);
       v.trim();
       contentLength = v.toInt();
+      // Schutz: max. 2KB Body
+      if (contentLength > 2048) contentLength = 2048;
     }
   }
 
@@ -434,23 +606,50 @@ void webHandleClient() {
     }
   }
 
-  if (reqLine.startsWith("GET / ")) {
-    handleRoot(client);
-  } else if (reqLine.startsWith("POST /feed")) {
-    handleFeed(client);
-  } else if (reqLine.startsWith("POST /wifisetup")) {
-    // WLAN-Zugangsdaten speichern und Neustart
-    String body;
+  // Body fuer alle POST-Requests upfront lesen (vereinheitlicht Auth + Handler)
+  bool isPost = reqLine.startsWith("POST ");
+  String body;
+  if (isPost) {
     if (contentLength < 0) contentLength = 0;
-    body.reserve((unsigned)contentLength);
-    unsigned long dl2 = millis() + 1500UL;
-    while ((int)body.length() < contentLength && millis() < dl2) {
+    // Reserve mind. 512 Bytes oder Content-Length (vermeidet Heap-Fragmentation)
+    body.reserve((unsigned)((contentLength > 512) ? contentLength : 512));
+    unsigned long dlBody = millis() + 500UL;  // 500ms Body-Timeout
+    while ((int)body.length() < contentLength && millis() < dlBody) {
       while (client.available() && (int)body.length() < contentLength) body += (char)client.read();
       delay(1);
     }
-    String sSSID, sPASS;
+  }
+
+  String path = extractPath(reqLine);
+
+  // Auth-Check (zentral): nur im Heimnetz-Modus, ausgenommen Manifest und Captive-Portal-Wifisetup
+  // Im Setup-Modus gibt es kein Admin-Passwort, weil noch nichts gespeichert ist.
+  gCurrentAuthPass = "";
+  gCurrentAuthPassHtml = "";
+  gCurrentAuthPassUrl = "";
+  if (!wifiIsSetupMode() && path != "/manifest.json") {
+    if (!requireAuth(client, reqLine, body)) {
+      delay(1);
+      client.stop();
+      return;
+    }
+    // Auth bestanden: Passwort + gecachte Varianten fuer Form/URL-Einbettung merken
+    gCurrentAuthPass = extractAdminPass(reqLine, body);
+    if (gCurrentAuthPass.length() > 0) {
+      gCurrentAuthPassHtml = htmlEscape(gCurrentAuthPass);
+      gCurrentAuthPassUrl = urlEncode(gCurrentAuthPass);
+    }
+  }
+
+  if (path == "/" && reqLine.startsWith("GET")) {
+    handleRoot(client);
+  } else if (path == "/feed" && isPost) {
+    handleFeed(client);
+  } else if (path == "/wifisetup" && isPost) {
+    String sSSID, sPASS, sAdminPass;
     if (kvFind(body, "ssid", sSSID) && kvFind(body, "pass", sPASS)) {
-      wifiCredSave(sSSID.c_str(), sPASS.c_str());
+      kvFind(body, "admin_pass", sAdminPass);  // optional, kann leer sein
+      wifiCredSave(sSSID.c_str(), sPASS.c_str(), sAdminPass.c_str());
     }
     client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"));
     client.print(F("<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\">"));
@@ -471,7 +670,7 @@ void webHandleClient() {
     client.stop();
     delay(200);
     NVIC_SystemReset(); // Arduino UNO R4 Neustart
-  } else if (reqLine.startsWith("GET /setup")) {
+  } else if (path == "/setup" && !isPost) {
     // Einrichtungsseite für WLAN-Konfiguration (PWA-optimiert)
     client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"));
     client.print(F("<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\">"));
@@ -501,22 +700,14 @@ void webHandleClient() {
     client.print(F("<form method=\"POST\" action=\"/wifisetup\">"));
     client.print(F("<label>WLAN-Name (SSID):<input type=\"text\" name=\"ssid\" autocomplete=\"off\" placeholder=\"MeinHeimnetz\" required></label>"));
     client.print(F("<label>Passwort:<input type=\"password\" name=\"pass\" autocomplete=\"off\" placeholder=\"WLAN-Passwort (min. 8 Zeichen)\" minlength=\"8\" maxlength=\"63\" required></label>"));
+    client.print(F("<hr style=\"margin:16px 0;border-color:#ddd\">"));
+    client.print(F("<label>🔒 Admin-Passwort (optional):<input type=\"password\" name=\"admin_pass\" autocomplete=\"off\" placeholder=\"Web-UI schützen (leer lassen = kein Schutz)\" minlength=\"4\" maxlength=\"32\"></label>"));
+    client.print(F("<div style=\"font-size:13px;color:#666;margin:-8px 0 12px 0\">Falls gesetzt, wird bei jedem Zugriff auf KORN nach diesem Passwort gefragt.</div>"));
     client.print(F("<button type=\"submit\">💾 Speichern & Verbinden</button>"));
     client.print(F("</form>"));
     client.print(F("<a href=\"/\"><button class=\"btn-secondary\">❌ Abbrechen / Zurück</button></a>"));
     client.print(F("</div></body></html>"));
-  } else if (reqLine.startsWith("POST /jogcw") || reqLine.startsWith("POST /jogccw")) {
-    // Body lesen und Sekunden-Parameter auslesen
-    String body;
-    if (contentLength < 0) contentLength = 0;
-    body.reserve((unsigned)contentLength);
-    unsigned long dl3 = millis() + 1500UL;
-    while ((int)body.length() < contentLength && millis() < dl3) {
-      while (client.available() && (int)body.length() < contentLength) {
-        body += (char)client.read();
-      }
-      delay(1);
-    }
+  } else if ((path == "/jogcw" || path == "/jogccw") && isPost) {
     String sSec;
     int seconds = 2;  // Default 2 Sekunden
     if (kvFind(body, "sec2", sSec)) {
@@ -525,7 +716,7 @@ void webHandleClient() {
     }
     // Sekunden in Steps umrechnen (bei 1000 steps/sec)
     int steps = seconds * FEED_STEPS_PER_SEC;
-    bool dirCW = reqLine.startsWith("POST /jogcw");
+    bool dirCW = (path == "/jogcw");
     
     Serial.print(F("Blockade lösen: "));
     Serial.print(seconds);
@@ -537,23 +728,14 @@ void webHandleClient() {
     motorFeed(steps, dirCW);
     // Redirect zurück
     client.print(F("HTTP/1.1 303 See Other\r\n"));
-    client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
-  } else if (reqLine.startsWith("GET /status")) {
+    client.print(F("Location: /"));
+    client.print(authQuerySuffix());
+    client.print(F("\r\nConnection: close\r\n\r\n"));
+  } else if (path == "/status" && !isPost) {
     handleStatus(client);
-  } else if (reqLine.startsWith("POST /save")) {
-    // Body lesen (robust: exakt Content-Length, mit Timeout)
-    String body;
-    if (contentLength < 0) contentLength = 0; // falls Header fehlte
-    body.reserve((unsigned)contentLength);
-    unsigned long dl = millis() + 1500UL;
-    while ((int)body.length() < contentLength && millis() < dl) {
-      while (client.available() && (int)body.length() < contentLength) {
-        body += (char)client.read();
-      }
-      delay(1);
-    }
+  } else if (path == "/save" && isPost) {
     handleSave(client, body);
-  } else if (reqLine.startsWith("POST /reset")) {
+  } else if (path == "/reset" && isPost) {
     // Factory Reset: EEPROM löschen und neu starten
     client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"));
     client.print(F("<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\"></head><body>"));
@@ -569,7 +751,7 @@ void webHandleClient() {
     Serial.println(F("Factory Reset: EEPROM gelöscht."));
     delay(200);
     NVIC_SystemReset(); // Arduino UNO R4 Neustart
-  } else if (reqLine.startsWith("GET /manifest.json")) {
+  } else if (path == "/manifest.json" && !isPost) {
     // Web App Manifest für PWA-Support
     client.print(F("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"));
     client.print(F("{\"name\":\"K.O.R.N. Fütterer\",\"short_name\":\"K.O.R.N.\",\"description\":\"Katastrophal Organisierter Runder Nahrungsmittelspender\",\"start_url\":\"/\",\"display\":\"standalone\",\"background_color\":\"#f5f5f5\",\"theme_color\":\"#1976d2\",\"icons\":[{\"src\":\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect fill='%231976d2' width='192' height='192'/%3E%3Ctext x='96' y='120' font-size='100' text-anchor='middle' fill='white'%3E🐔%3C/text%3E%3C/svg%3E\",\"sizes\":\"192x192\",\"type\":\"image/svg+xml\"}]}"));

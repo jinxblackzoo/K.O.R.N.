@@ -49,15 +49,37 @@ static bool wifiCredLoad(WifiCred &cred) {
 }
 
 // WLAN-Zugangsdaten in EEPROM speichern
-void wifiCredSave(const char* ssid, const char* pass) {
+void wifiCredSave(const char* ssid, const char* pass, const char* admin_pass) {
   WifiCred cred;
   cred.magic = WIFI_CRED_MAGIC;
   strncpy(cred.ssid, ssid, sizeof(cred.ssid) - 1);
   cred.ssid[sizeof(cred.ssid) - 1] = '\0';
   strncpy(cred.pass, pass, sizeof(cred.pass) - 1);
   cred.pass[sizeof(cred.pass) - 1] = '\0';
+  if (admin_pass && strlen(admin_pass) > 0) {
+    strncpy(cred.admin_pass, admin_pass, sizeof(cred.admin_pass) - 1);
+    cred.admin_pass[sizeof(cred.admin_pass) - 1] = '\0';
+  } else {
+    cred.admin_pass[0] = '\0';  // leer = kein Schutz
+  }
   EEPROM.put(wifiCredOffset(), cred);
   Serial.println(F("WLAN-Zugangsdaten gespeichert."));
+}
+
+// Prüft ob Admin-Passwort gesetzt ist
+bool wifiCredHasAdminPass() {
+  WifiCred cred;
+  if (!wifiCredLoad(cred)) return false;
+  return cred.admin_pass[0] != '\0';
+}
+
+// Prüft ob übergebenes Admin-Passwort korrekt ist (oder keins gesetzt)
+bool wifiCredCheckAdminPass(const char* input) {
+  WifiCred cred;
+  if (!wifiCredLoad(cred)) return true;  // kein Cred = kein Schutz
+  if (cred.admin_pass[0] == '\0') return true;  // kein Admin-Passwort gesetzt
+  if (!input) return false;
+  return strcmp(cred.admin_pass, input) == 0;
 }
 
 // Gibt zurück ob Einrichtungs-AP aktiv ist
@@ -137,11 +159,13 @@ void dnsHandleRequests() {
 }
 
 // Heimnetz-Verbindung herstellen
+// WICHTIG: Watchdog während der Wait-Schleifen refreshen, sonst Boot-Loop bei langsamem WLAN
 static bool connectToHome(const char* ssid, const char* pass) {
   Serial.print(F("Verbinde mit WLAN: "));
   Serial.println(ssid);
   WiFi.end();
   delay(200);
+  watchdogRefresh();
   WiFi.setHostname("KORN"); // DHCP Option 12: Router zeigt Gerät als "KORN" an
   WiFi.begin(ssid, pass);
   uint32_t start = millis();
@@ -150,6 +174,7 @@ static bool connectToHome(const char* ssid, const char* pass) {
       Serial.println(F("WLAN-Verbindung Timeout."));
       return false;
     }
+    watchdogRefresh();
     delay(500);
     Serial.print('.');
   }
@@ -157,6 +182,7 @@ static bool connectToHome(const char* ssid, const char* pass) {
   // Auf gültige DHCP-IP warten (max. 5s) – verhindert IP=0.0.0.0 Logs
   unsigned long ipStart = millis();
   while (millis() - ipStart < 5000UL) {
+    watchdogRefresh();
     IPAddress ip = WiFi.localIP();
     if (ip[0] != 0 || ip[1] != 0 || ip[2] != 0 || ip[3] != 0) break;
     delay(200);
@@ -165,42 +191,69 @@ static bool connectToHome(const char* ssid, const char* pass) {
 }
 
 // Initialisierung: Heimnetz oder Einrichtungs-AP
+// Bei gespeicherten Credentials werden bis zu 3 Verbindungsversuche unternommen.
+// Falls alle fehlschlagen → Setup-AP als Rückfall-Option (sonst wäre das Gerät
+// bei Tippfehler im WLAN-Passwort für immer unerreichbar).
 void wifiInit() {
   WifiCred cred;
   if (wifiCredLoad(cred)) {
-    if (connectToHome(cred.ssid, cred.pass)) {
-      gIsSetupMode = false;
-      gWifiConnected = true;
-      strncpy(gConnectedSSID, cred.ssid, sizeof(gConnectedSSID) - 1);
-      server.begin();
-      IPAddress ip = WiFi.localIP();
-      Serial.print(F("WLAN verbunden. IP: "));
-      Serial.println(ip);
-      return;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      Serial.print(F("WLAN-Verbindungsversuch "));
+      Serial.print(attempt);
+      Serial.println(F("/3"));
+      if (connectToHome(cred.ssid, cred.pass)) {
+        gIsSetupMode = false;
+        gWifiConnected = true;
+        strncpy(gConnectedSSID, cred.ssid, sizeof(gConnectedSSID) - 1);
+        server.begin();
+        IPAddress ip = WiFi.localIP();
+        Serial.print(F("WLAN verbunden. IP: "));
+        Serial.println(ip);
+        return;
+      }
+      // Kurz warten zwischen Versuchen – mit Watchdog-Refresh
+      for (int w = 0; w < 4; w++) { watchdogRefresh(); delay(500); }
     }
-  } else {
-    Serial.println(F("Keine WLAN-Zugangsdaten gespeichert."));
+    // Alle Versuche beim Boot fehlgeschlagen → Setup-AP anbieten.
+    // So kommt der Nutzer bei Tippfehler im WLAN-PW wieder rein.
+    Serial.println(F("WLAN-Verbindung beim Boot fehlgeschlagen – starte Setup-AP als Rückfall."));
+    startSetupAP();
+    return;
   }
-  // Fallback: Einrichtungs-AP
+  Serial.println(F("Keine WLAN-Zugangsdaten gespeichert."));
+  // Fallback: Einrichtungs-AP (Erstinbetriebnahme)
   startSetupAP();
 }
 
 // Reconnect-Prüfung (periodisch aus main.ino aufrufen)
+// Strategie: Bei vorhandenen WLAN-Daten weiter probieren (kein automatischer Setup-AP).
+// Setup-AP nur, wenn keine Credentials gespeichert sind (Erstinbetriebnahme).
+// HINWEIS: connectToHome() kann > 4s blockieren (WiFi.begin auf UNO R4). Falls das
+// passiert, löst der Watchdog einen Reboot aus → setup() läuft erneut, wifiInit()
+// greift. Das ist als Selbstheilung akzeptabel.
 void wifiCheckAndReconnect() {
   if (gIsSetupMode) return; // Im Setup-Modus kein Reconnect
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println(F("WLAN getrennt – Reconnect..."));
     gWifiConnected = false;
     WifiCred cred;
-    if (wifiCredLoad(cred) && connectToHome(cred.ssid, cred.pass)) {
+    if (!wifiCredLoad(cred)) {
+      // Keine Credentials → echte Erstinbetriebnahme
+      Serial.println(F("Keine WLAN-Daten – Einrichtungs-AP gestartet."));
+      startSetupAP();
+      return;
+    }
+    if (connectToHome(cred.ssid, cred.pass)) {
       gWifiConnected = true;
       server.begin();
       IPAddress ip = WiFi.localIP();
       Serial.print(F("WLAN wiederverbunden. IP: "));
       Serial.println(ip);
     } else {
-      Serial.println(F("Reconnect fehlgeschlagen – Einrichtungs-AP gestartet."));
-      startSetupAP();
+      // Reconnect fehlgeschlagen – nicht Setup-AP starten, sondern beim nächsten
+      // wifiCheckAndReconnect-Aufruf erneut versuchen. Geplante Fütterungen
+      // laufen weiter (gNtpSynced bleibt erhalten, Zeit per millis()-Drift).
+      Serial.println(F("Reconnect fehlgeschlagen – nächster Versuch in 30s."));
     }
   }
 }

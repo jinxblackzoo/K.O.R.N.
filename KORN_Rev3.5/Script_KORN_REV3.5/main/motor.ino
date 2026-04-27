@@ -2,11 +2,10 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
 
-// Pins gem. README
+// Pins gem. README (BUZZER_PIN kommt aus main.ino)
 #define PUL_PIN 2
 #define DIR_PIN 3
 #define ENA_PIN 5
-#define BUZZER_PIN 6   // aktiv (HIGH=Ton)
 #define RELAY_PIN 8
 // HW-482 Relais-Module - ACHTUNG: Manche Varianten sind ACTIVE-HIGH!
 static const bool RELAY_ACTIVE_HIGH = true; // true: HIGH=an, LOW=aus / false: LOW=an, HIGH=aus
@@ -176,12 +175,10 @@ bool motorFeed(int steps, bool dirCW) {
     }
     
     // Watchdog alle 2 Sekunden zurücksetzen während Motorlauf
-    #ifdef __AVR__
-      if (millis() - lastWdReset > 2000) {
-        wdt_reset();
-        lastWdReset = millis();
-      }
-    #endif
+    if (millis() - lastWdReset > 2000) {
+      watchdogRefresh();
+      lastWdReset = millis();
+    }
     if ((long)(millis() - deadline) > 0) {
       Serial.println(F("TIMEOUT: Sicherheitsabbruch!"));
       break; // Sicherheitsabbruch

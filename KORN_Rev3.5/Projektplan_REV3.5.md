@@ -100,8 +100,24 @@ KORN_Rev3.5/
 - [ ] Hardware-Test mit echtem Setup (Verdrahtung + Motorlauf)
 - [ ] Schaltplan überarbeiten (DS1302 entfernt, neue Pin-Belegung)
 - [ ] NTP-Sync über Nacht testen (Zeitdrift, Sommer-/Winterzeit)
-- [ ] WLAN-Reconnect nach Router-Neustart testen
+- [x] WLAN-Reconnect nach Router-Neustart testen (Logik: 3 Vordergrund-Versuche, dann 30s-Hintergrund-Loop, kein automatischer Setup-AP)
 
 ### 📝 Zukünftige Verbesserungen
 - Siehe Abschnitt "Zukünftige Verbesserungen (Nice-to-have)"
 
+### ⚠️ Sicherheits- und Stabilitäts-Verbesserungen (Rev3.5)
+- [x] **Watchdog aktiviert** auf UNO R4 (4s Timeout via `WDT.h`)
+- [x] **Watchdog-Refresh in Wait-Schleifen** (`connectToHome`, `ntpSync`, Recovery) – verhindert Boot-Loop
+- [x] **EEPROM-Persistenz für Fütterungs-State** (verhindert Doppel-Fütterung nach Stromausfall)
+- [x] **Setup-AP nur bei Erstinbetriebnahme** (vorher: bei jedem WLAN-Verlust)
+- [x] **HTTP-Timeouts reduziert** (1500ms → 500ms, weniger Loop-Blockaden)
+- [x] **HTML-Escaping & URL-Encoding** für Admin-Passwort (XSS-Schutz)
+- [x] **Auth-Cache pro Request** (HTML/URL-Encoding nur einmal berechnet)
+- [x] **String-Buffer reserviert** (512B upfront, weniger Heap-Fragmentation)
+- [x] **Optionales Admin-Passwort** + Login-Seite
+- [x] **Hardware-Recovery** (Pin 10↔11 5s halten beim Boot → Factory Reset)
+- [x] **Serial-Wait mit Timeout** (Gerät startet auch ohne USB)
+- [x] **DHCP-IP Wait** (verhindert IP=0.0.0.0 Logs)
+- [x] **WPA2-Validierung** (8-63 Zeichen)
+- [x] **Body-Size-Limit** (max. 2KB POST verhindert DoS)
+- [x] **Laien-FAQ in README** (häufige Fragen für Hühnerfreunde)

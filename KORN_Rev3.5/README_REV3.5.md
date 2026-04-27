@@ -1,13 +1,13 @@
 # K.O.R.N.
 **Katastrophal Organisierter Runder Nahrungsmittelspender**
 
-K.O.R.N. ist ein robuster, Open-Source/Hardware, wasserdichter, mit einfachen Mitteln konstruierter und mäusesicherer Fütterungsautomat für Geflügel oder alle andere Art von Hausgetier 😉
+K.O.R.N. ist ein robuster, Open-Source/Hardware, wasserdichter, mit einfachen Mitteln konstruierter und mäusesicherer Fütterungsautomat für Geflügel oder jede andere Art von Hausgetier 😉
 
 ## 🎯 Projektübersicht
 
-Aufgrund der enttäuschenden Erfahrung mit gekauften Fütterungsautomaten welche trotz der teils hohen Preise entweder nach drei Wochen defekt waren, oder ganze Mäusefamilien durchfütterten, musste eine Eigenkonstruktion her. Die Entscheidungsgrundlage für das gewählte System mit einer Förderschnecke in einem Rohr, basiert auf einer Recherche im Dubbel Ausgabe von 2001.
+Aufgrund der enttäuschenden Erfahrung mit gekauften Fütterungsautomaten welche trotz der teils hohen Preise entweder nach drei Wochen defekt waren, oder ganze Mäusefamilien durchfütterten, musste eine Eigenkonstruktion her. Die Entscheidungsgrundlage für das gewählte System mit einer Förderschnecke in einem Rohr, basiert auf einer Recherche in der Dubbel-Ausgabe von 2001.
 
-Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter) aus einem Silo (KG-Rohr) in einen Auswurfschacht befördert. Das Gehäuse besteht aus überall erhältlichen, robusten und günstigen HT-, bzw KG-Rohren.
+Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter) aus einem Silo (KG-Rohr) in einen Auswurfschacht befördert. Das Gehäuse besteht aus überall erhältlichen, robusten und günstigen HT- bzw. KG-Rohren.
 
 Revision 3.5 basiert auf der bewährten Rev3-Hardware (Arduino UNO R4 WiFi) und bringt eine neue WLAN-Logik: Statt eines eigenen Access Points verbindet sich KORN mit einem vorhandenen Heimnetz. Die Zeitsteuerung erfolgt über NTP (Internetzeit) – die DS1302 RTC entfällt vollständig.
 
@@ -70,10 +70,12 @@ Relais Schaltkontakte:
   - **Test:** LED am Modul leuchtet bei HIGH = ACTIVE-HIGH, bei LOW = ACTIVE-LOW
   - Im Code anpassbar: `RELAY_ACTIVE_HIGH` in `motor.ino` (Standard: `true`)
   - Relais trennt nur die Plusleitung: 12V+ → COM → NO → +Vdc des DM320T
-* **Manueller Trigger**: 
+* **Manueller Knopf** (Pin 10↔11): 
   - Pin 11 als permanentes LOW (OUTPUT)
   - Pin 10 als INPUT_PULLUP
-  - Kurzschluss 10 ↔ 11 löst sofort aus (mit 150ms Entprellung)
+  - **Fütterung**: Knopf 1–3 Sekunden drücken & loslassen
+  - **Factory Reset**: Knopf 10 Sekunden halten (Buzzer warnt ab 5s)
+  - **Lockout**: Während Fütterung + 2s danach wird der Knopf ignoriert
 * **ENA-Logik**: ENA=HIGH aktiviert den Treiber; ENA=LOW deaktiviert
 
 ## 🚀 Software-Features
@@ -112,7 +114,8 @@ Relais Schaltkontakte:
   - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
   - Footer mit GitHub-Link und Build-Datum
 * Manuelle Bedienung:
-  - Kurzschluss Pin 10 ↔ 11 als Taster
+  - Knopf an Pin 10 ↔ 11 (1–3s drücken = Fütterung)
+  - 10s halten = Factory Reset (Buzzer warnt ab 5s)
   - Sofortige Fütterung unabhängig vom Zeitplan
 * Automatische Sommer-/Winterzeit (Europa/Berlin via NTP-Heuristik)
 * NTP-Resync alle 60 Minuten
@@ -182,7 +185,15 @@ Für einen vollständigen Reset gibt es zwei Möglichkeiten:
 - Auf der Hauptseite den Button **"🗑️ Auf Werkseinstellungen zurücksetzen"** unter dem NTP-Status klicken
 - Arduino startet neu mit leerem EEPROM → Einrichtungs-AP öffnet sich automatisch
 
-**Option B – Per Sketch (falls Web-UI nicht erreichbar):**
+**Option B – Hardware-Recovery (ohne PC, bei vergessenem Admin-Passwort):**
+- Den **manuellen Knopf (Pin 10 ↔ 11) gedrückt halten**
+- Nach 5 Sekunden beginnt der Buzzer zu piepen (Vorwarnung)
+- Knopf **weiter halten** bis insgesamt 10 Sekunden
+- Bei 10s: Buzzer aus + 3 lange Bestätigungs-Piepser → EEPROM wurde gelöscht
+- KORN startet automatisch neu im Einrichtungs-AP `KORN-Setup`
+- **Abbruch möglich**: Knopf vor 10s wieder loslassen → nichts passiert
+
+**Option C – Per Sketch (falls Hardware-Recovery nicht möglich):**
 - Arduino IDE: **Datei → Beispiele → EEPROM → eeprom_clear** öffnen
 - Auf den Arduino flashen, warten bis serieller Monitor "Done clearing EEPROM" anzeigt
 - Dann wieder den originalen KORN-Sketch flashen
@@ -223,6 +234,104 @@ SSID:MeinHeimnetz IP:192.168.1.42 | TIME:18:48 | Last:17:10(5000) | Next1:19:00(
 - Nächste Fütterung: um 19:00 Uhr (in 12 Minuten)
 - NTP: synchronisiert
 - Gerät läuft seit 32 Minuten
+
+---
+
+## 🛡️ 24/7-Betriebssicherheit
+
+KORN Rev3.5 ist für unbeaufsichtigten Dauerbetrieb ausgelegt. Folgende Mechanismen schützen vor Ausfällen:
+
+### ⏱️ Watchdog
+- **Hardware-Watchdog (4s Timeout)** auf UNO R4 aktiviert (`WDT.h`)
+- Wenn der Code irgendwo hängt > 4s → automatischer Neustart
+- Wird in `loop()` und während Motorlauf periodisch zurückgesetzt
+- **Aktivierung erst nach WLAN-/NTP-Init**, weil `WiFi.begin()` intern länger als 4s blockieren kann (Kommunikation mit ESP32-S3-WiFi-Coprozessor). Während Boot ist der Nutzer eh anwesend.
+
+### 🔌 Stromausfall-Verhalten
+- **EEPROM persistiert**: WLAN-Daten, Konfiguration, Admin-Passwort, **letzte Fütterung & Tagesmarker**
+- **Schutz vor Doppel-Fütterung**: Nach Stromausfall weiß KORN noch, ob heute schon gefüttert wurde
+- **Stepper sicher**: Bei Stromverlust stoppt Motor sofort, Position wird beim Boot auf 0 gesetzt
+- **Relais fällt ab**: Stepper-Treiber erhält keine 12V mehr, kein wilder Motorlauf
+
+### 🌐 Internet-Ausfall
+- **NTP-Resync alle 60min**, falls Internet zurückkommt
+- **Bei kurzzeitigem Ausfall (< 24h)**: Zeit läuft per `millis()` weiter, geplante Fütterungen funktionieren
+- **WLAN-Reconnect alle 30s**: Bei vorhandenen Credentials wird **kein Setup-AP** automatisch geöffnet
+- **Bei langen Ausfällen**: Manuelle Fütterung per Hardware-Taster möglich (unabhängig von Internet/WLAN)
+
+### 🔄 Was passiert bei...
+| Szenario | Verhalten |
+|----------|-----------|
+| **Stromausfall < 1 Min** | Reboot → EEPROM-Daten geladen → keine Doppel-Fütterung |
+| **Stromausfall > 5 Min** | Reboot, NTP-Sync → evtl. verpasste Fütterung wird **NICHT** nachgeholt |
+| **WLAN-Ausfall** | Geplante Fütterungen laufen weiter (Zeit per `millis()` Drift) |
+| **Internet-Ausfall (DSL)** | Wie WLAN-Ausfall: NTP-Resync schlägt fehl, Zeit driftet |
+| **Code-Hänger** | Watchdog löst Reboot nach 4s aus |
+| **Router-Reboot** | Reconnect alle 30s, max. 3 Versuche im Vordergrund |
+
+---
+
+## 🐔 Häufige Fragen für Hühnerfreunde
+
+> Einfache Antworten für alle, die kein IT-Studium haben.
+
+### ❓ Was passiert, wenn der Strom kurz weg war?
+**Nichts Schlimmes.** KORN startet neu und läuft normal weiter. Das Gerät merkt sich im internen Speicher, ob heute schon gefüttert wurde – **deine Hühner bekommen nicht zweimal Futter**. Die Uhrzeit wird automatisch aus dem Internet geholt (NTP), sobald das WLAN wieder da ist.
+
+### ❓ Was ist, wenn ich das Admin-Passwort vergesse?
+**Kein Problem – einfach den manuellen Knopf 10 Sekunden gedrückt halten:**
+1. Knopf (Pin 10↔11) drücken und **halten**
+2. Nach 5 Sekunden beginnt der Buzzer zu piepen (Vorwarnung)
+3. Knopf weiter halten, bei 10 Sekunden hört das Piepen auf, dann kommen 3 lange Bestätigungs-Piepser
+4. KORN startet automatisch neu im Einrichtungs-Modus (`KORN-Setup`, Passwort `Chaosfeeder`)
+
+**Reset abbrechen:** Den Knopf während des Piepens (5-10s) wieder loslassen.
+
+### ❓ Fallen meine Hühner vom Futter, wenn das Internet ausfällt?
+**Für ein paar Stunden: nein.** KORN hat die Uhrzeit im Speicher und füttert weiter nach Plan. Bei langen Ausfällen (mehrere Tage) könnte die Zeit ein paar Minuten falsch laufen – aber gefüttert wird trotzdem. Notfalls kannst du immer den **manuellen Taster** drücken (funktioniert auch ohne Internet und WLAN).
+
+### ❓ Der Router wurde neu gestartet – was nun?
+**KORN verbindet sich automatisch wieder.** Alle 30 Sekunden wird geprüft, ob das Heimnetz zurück ist. Du musst nichts tun.
+
+### ❓ Geht das Gerät kaputt, wenn es 24/7 läuft?
+**Nein, es ist dafür gemacht.** Ein Hardware-Watchdog startet das Gerät automatisch neu, falls die Software mal hängen sollte (selten). Der Speicher ist robust genug für **über 100 Jahre** Dauerbetrieb mit zwei Fütterungen pro Tag.
+
+### ❓ Kann meine Nachbarin an meine Hühnerfütterung?
+**Nur wenn sie dein WLAN hat.** KORN ist **nicht aus dem Internet** erreichbar, nur aus deinem Heimnetz. Zusätzlich kannst du ein Admin-Passwort setzen, dann kommt auch niemand ohne dieses Passwort rein – selbst wenn jemand im WLAN ist.
+
+### ❓ Muss KORN immer mit dem Computer verbunden sein?
+**Nein.** Der USB-Anschluss ist nur für das erste Aufspielen der Software nötig. Danach braucht KORN nur einen Stromanschluss und WLAN.
+
+### ❓ Wo sehe ich, ob KORN gerade läuft?
+Rufe im Browser `http://korn` auf (oder die IP-Adresse). Dort siehst du:
+- Aktuelle Uhrzeit
+- Wann zuletzt gefüttert wurde
+- Wann die nächste Fütterung kommt
+- Status des Geräts
+
+---
+
+## 🔑 Admin-Passwort (optional)
+
+Beim Einrichten kann ein **Admin-Passwort** (4-32 Zeichen) vergeben werden, um die Web-UI zu schützen.
+
+**Verhalten:**
+- **Leer gelassen** → KORN ist im Heimnetz frei zugänglich (jeder mit IP-Adresse)
+- **Gesetzt** → Beim ersten Zugriff erscheint eine Login-Seite, das Passwort wird anschließend in der URL und in Formularen weitergereicht
+
+**Geändert wird das Passwort durch:**
+1. Factory Reset (Web-UI Button **oder** Hardware-Recovery)
+2. Neue Einrichtung mit anderem Admin-Passwort
+
+**Vergessen? → Hardware-Recovery:**
+- Manuellen Knopf (Pin 10↔11) **10 Sekunden** gedrückt halten
+- Buzzer piept ab 5s als Vorwarnung
+- Bei 10s: 3 lange Piepser → EEPROM gelöscht, KORN startet automatisch im Setup-AP
+
+**Sicherheitshinweise:**
+- Passwort wird **unverschlüsselt** über HTTP übertragen → nur im vertrauenswürdigen Heimnetz nutzen
+- Passwort wird im EEPROM **im Klartext** gespeichert
+- Schützt nicht vor Netzwerk-Sniffing, aber vor versehentlichen Klicks und unautorisierten Nutzern im LAN
 
 ---
 
@@ -267,8 +376,8 @@ Die Bauteile der Förderschnecke wurden mittels FreeCAD (LGPL2+, CC-BY-3.0) entw
 * **Roter NTP-Button**: Router hat keine Internetverbindung, oder NTP-Server nicht erreichbar
 * **Einstellungen gehen verloren**: Nur bei EEPROM-Fehler (sehr selten) – siehe [Factory Reset](#-factory-reset-werkseinstellungen-wiederherstellen)
 
-### Notfall-Fütterung (Hardware-Taster)
-Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit einem Draht verbinden → Sofortige Fütterung wird ausgelöst (umgeht 2-Minuten-Regel).
+### Notfall-Fütterung (Hardware-Knopf)
+Falls die Webseite nicht funktioniert: Knopf an Pin 10↔11 **1–3 Sekunden** drücken und loslassen → Sofortige Fütterung wird ausgelöst (umgeht 2-Minuten-Regel).
 
 ---
 
@@ -281,14 +390,14 @@ Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit ein
 | # | Risiko | Beschreibung | Warum vertretbar / nicht behoben |
 |---|--------|--------------|----------------------------------|
 | 1 | **HTTP statt HTTPS** | Webseite läuft auf Port 80 unverschlüsselt – Daten im LAN im Klartext sichtbar | Der Arduino UNO R4 WiFi unterstützt kein TLS als Server (nur als Client). HTTPS wäre technisch nicht umsetzbar ohne kompletten Hardware-Wechsel. Das einzige sensible ist das WLAN-Passwort bei der Ersteinrichtung – danach werden nur unkritische Fütterungsdaten übertragen. |
-| 2 | **Keine Login-Authentifizierung** | Wer die IP-Adresse kennt, kann füttern, konfigurieren oder Factory Reset auslösen | Das schlimmste was passieren kann: Hühner werden extra gefüttert oder Einstellungen zurückgesetzt. Kein Datenverlust, keine persönlichen Daten betroffen. Im privaten Heimnetz kennt niemand die IP außer dem Admin. VLAN-Trennung verhindert Zugriff aus anderen Netzsegmenten. |
+| 2 | **Optional: Login-Authentifizierung** | Web-UI kann durch ein Admin-Passwort geschützt werden (bei Einrichtung optional vergeben). Ohne Passwort hat jeder im Netzwerk vollen Zugriff. | Bei Einrichtung kann ein Admin-Passwort (4-32 Zeichen) gesetzt werden. Falls vergessen: Hardware-Recovery (Knopf Pin 10↔11 zur Laufzeit 10s halten) löscht das EEPROM. Ohne Admin-Passwort: Im privaten Heimnetz mit VLAN-Trennung tolerierbar. |
 | 3 | **WLAN-Passwort im EEPROM (Klartext)** | Wer physischen Zugriff auf den Arduino hat, kann das WLAN-Passwort auslesen | Erfordert physischen Zugriff auf das Gerät + Arduino IDE + Spezialkenntnisse. Wer physischen Zugriff zum Hühnerstall hat, könnte das WLAN-Gerät ohnehin einfach mitnehmen. Arduino in abgeschlossenem Gehäuse minimiert dieses Risiko. |
 
 ### 🟡 Bekannte Risiken (mittel)
 
 | # | Risiko | Beschreibung | Warum vertretbar / nicht behoben |
 |---|--------|--------------|----------------------------------|
-| 4 | **Kein Rate-Limit / DoS-Schutz** | Bei vielen Anfragen kann der Webserver überlastet werden | KORN ist nur im lokalen Netz erreichbar, nicht aus dem Internet. Ein gezielter DoS-Angriff aus dem eigenen Heimnetz ist kein realistisches Szenario. Worst Case: Webserver temporär nicht erreichbar, Fütterungslogik läuft weiter. |
+| 4 | **Kein Rate-Limit / DoS-Schutz** | Bei vielen Anfragen kann der Webserver überlastet werden | KORN ist nur im lokalen Netz erreichbar, nicht aus dem Internet. Ein gezielter DoS-Angriff aus dem eigenen Heimnetz ist kein realistisches Szenario. Worst Case: Webserver temporär nicht erreichbar, Fütterungslogik läuft weiter. **Watchdog (4s)** rettet bei Hängern. |
 | 5 | **Einrichtungs-AP ohne Session-Schutz** | Im Setup-AP kann jeder (mit Passwort) WLAN-Daten ändern | Der Setup-AP ist mit WPA2 und Passwort (`Chaosfeeder`) gesichert. Nur wer das Passwort kennt, kommt rein. Setup-AP ist nur aktiv wenn kein WLAN verbunden – also nur kurzzeitig bei Ersteinrichtung oder nach Factory Reset. |
 | 6 | **CSRF (Cross-Site Request Forgery)** | Bösartige Webseiten könnten Fütterung/Reset auslösen | Erfordert dass Nutzer gleichzeitig eine bösartige Webseite und die KORN-Seite offen hat, und ein Angreifer die interne KORN-IP kennt. Sehr unwahrscheinliches Szenario für ein Heimgerät. Worst Case: ungewollte Fütterung oder Reset. |
 | 7 | **DNS-Server im Setup-Modus** | Captive Portal DNS-Server ist UDP-offen | DNS-Server läuft **ausschließlich** im Einrichtungs-AP-Modus und antwortet nur auf Anfragen im 192.168.4.x-Netz. Sobald KORN mit dem Heimnetz verbunden ist, wird der DNS-Server automatisch gestoppt. |

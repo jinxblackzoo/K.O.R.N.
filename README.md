@@ -14,15 +14,15 @@ Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter)
 
 ## Revision 1 wurde verworfen
 
-## Revision 2 enthält die neuen CAD Dateien und eine Steuerung mit ARDUINO Uno R3 
+## Revision 2 enthält die neuen CAD-Dateien und eine Steuerung mit ARDUINO Uno R3
 
-Resision  wurde entwickelt als supersimple autarke stromsparende Version ohne Extrafeatures.
+Revision 2 wurde entwickelt als supersimple, autarke und stromsparende Version ohne Extra-Features.
 
 ## Revision 3 basiert auf den CAD Dateien von Rev.2 und einer Steuerung mit ARDUINO Uno R4 WiFi ✅ Fertig
 
 Revision 3 wurde entwickelt als autarke Off-Grid Funktion. Ein WLAN mit Internetverbindung ist hier nicht vorgesehen.
 Stattdessen kann KORN mitten im Feld ohne eigene Internetverbindung installiert werden. Der Arduino UNO R4 spannt einen eigenen WLAN Accesspoint auf. Mit diesem kann man sich mittels Smartphone verbinden.
-Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellungen zurücksetzen. Dann mit dem WLAN "KORN" verbinden und im Browser 192.168.4.1 öffnen. Voila, fertig ist das eigene CCCC (ChickenCoopControlCenter) 🥳 😉
+Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellungen zurücksetzen. Dann mit dem WLAN "KORN" verbinden und im Browser `192.168.4.1` öffnen. Voilà, fertig ist das eigene CCCC (ChickenCoopControlCenter) 🥳 😉
 
 ## Revision 3.5 basiert auf Rev.3 (Arduino UNO R4 WiFi) mit neuer WLAN-Logik ✅ Fertig
 
@@ -35,6 +35,15 @@ Statt eines eigenen Access Points verbindet sich KORN nun mit einem vorhandenen 
 - **NTP-Zeitsteuerung**: Internetzeit statt DS1302 RTC (mit Sommer-/Winterzeit)
 - **Buzzer-Jagdsignal**: Akustisches Signal "Zum Essen" (3/8-Takt) während der Fütterung
 - **WPA2-Unterstützung** mit Passwort-Validierung (8-63 Zeichen)
+- **Optionales Admin-Passwort**: Web-UI-Schutz vor unautorisierten Zugriffen im Heimnetz
+- **Hardware-Recovery**: Bei vergessenem Passwort – Knopf (Pin 10↔11) zur Laufzeit 10s halten → EEPROM-Reset (Buzzer warnt ab 5s, Abbruch durch Loslassen möglich)
+
+**24/7-Betriebssicherheit:**
+- **Hardware-Watchdog (4s)**: Automatischer Reboot bei Code-Hängern
+- **Stromausfall-Schutz**: EEPROM persistiert letzte Fütterung → keine Doppel-Fütterung nach Reboot
+- **Robuster WLAN-Reconnect**: Bei vorhandenen Credentials kein automatischer Setup-AP-Modus
+- **HTTP-Timeouts optimiert**: 500ms statt 1500ms → weniger Loop-Blockaden
+- **XSS-Schutz**: HTML-Escaping & URL-Encoding für Admin-Passwort
 
 **Ablauf:** Beim ersten Start oder bei fehlendem WLAN öffnet der Arduino einen temporären Einrichtungs-AP. Nach Speichern der Zugangsdaten verbindet sich KORN automatisch mit dem Heimnetz.
 

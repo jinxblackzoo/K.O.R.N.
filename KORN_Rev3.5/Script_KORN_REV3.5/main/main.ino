@@ -26,16 +26,22 @@
 #include <Arduino.h>
 #include <EEPROM.h>     // Konfiguration + WLAN-Zugangsdaten
 #include <WiFiUdp.h>
-// Watchdog nur für AVR-basierte Arduinos (UNO R4 nutzt anderen Mechanismus)
+// Watchdog: UNO R4 nutzt WDT.h, AVR nutzt avr/wdt.h
 #ifdef __AVR__
   #include <avr/wdt.h>
-  #define WATCHDOG_ENABLED
+  #define WATCHDOG_AVR
+#else
+  #include <WDT.h>           // Arduino UNO R4 Watchdog
+  #define WATCHDOG_R4
 #endif
+#define WATCHDOG_ENABLED
+#define WATCHDOG_TIMEOUT_MS 4000UL  // 4s – muss > Web-Request-Timeout sein
 #include <AccelStepper.h>
 #include <WiFiS3.h>
 
-// Vorwärtsdeklaration: nötig, damit Arduino-Präprozessor-Prototypen KConfig kennen
+// Vorwärtsdeklarationen: nötig, damit Arduino-Präprozessor-Prototypen diese Structs kennen
 struct KConfig;
+struct FeedState;
 
 // WLAN-Zugangsdaten Struktur (genutzt von wifi_client.ino)
 #define WIFI_CRED_MAGIC 0x4B57
@@ -43,6 +49,7 @@ struct WifiCred {
   uint16_t magic;
   char ssid[33];
   char pass[64];
+  char admin_pass[33];  // optional: Web-UI Passwort (leer = kein Schutz)
 };
 
 // Globale Serverinstanz (Port 80) – genutzt von wifi_client.ino und homepage.ino
@@ -95,6 +102,9 @@ const uint8_t SRC_SCHED2 = 4;
 #define MANUAL_TRIGGER_PIN 10  // INPUT_PULLUP
 #define MANUAL_GROUND_PIN 11   // OUTPUT LOW
 
+// Buzzer (gemeinsame Definition für main.ino und motor.ino)
+#define BUZZER_PIN 6  // aktiv (HIGH=Ton)
+
 // Vorwärtsdeklarationen der Modul-APIs
 void motorInit();
 void motorEnable(bool on);
@@ -107,7 +117,7 @@ void dnsHandleRequests();
 bool wifiIsSetupMode();
 bool wifiIsConnected();
 const char* wifiGetSSID();
-void wifiCredSave(const char* ssid, const char* pass);
+void wifiCredSave(const char* ssid, const char* pass, const char* admin_pass);
 void webInit();
 void webHandleClient();
 
@@ -124,6 +134,9 @@ static void computeNextTimes(int nowH, int nowM, int &n1H, int &n1M, int &n2H, i
 
 // Sofortfütterung zentral aus main anstoßen (für Web/Hardware)
 void requestImmediateFeed();
+
+// Watchdog-Refresh: in motor.ino während Motorlauf aufgerufen
+void watchdogRefresh();
 
 // Konfig-Getter/Setter für Web-UI (entkoppelt von struct in anderen Modulen)
 int cfgGetH1();
@@ -151,10 +164,18 @@ static bool fedToday2 = false;    // Marker: Fütterung 2 heute ausgeführt
 static bool feedingInProgress = false; // einfache Reentrancy-Sperre
 static volatile uint8_t nextFeedSrc = SRC_NONE; // vor requestImmediateFeed setzen
 static uint8_t lastFeedSrc = SRC_NONE;          // für Statusanzeige
-// Manuell-Trigger-Entprellung/Hold und Lockout
-static unsigned long manualLowSinceMs = 0;        // Zeitpunkt seit dem D10=LOW ist
-static unsigned long manualLockoutUntilMs = 0;    // bis wann manuelle Trigger ignoriert werden
-static bool manualConsumed = false;               // einmalige Auslösung pro Tastendruck (bis Release)
+// Manueller Knopf (Pin 10↔11) – State-Machine:
+//   - 1-3s drücken & loslassen   → Fütterung
+//   - 5-10s halten                → Buzzer warnt (Reset-Vorankündigung)
+//   - >=10s halten                → Factory Reset (EEPROM löschen + Neustart)
+//   - Während Fütterung + 2s nach → Pin komplett ignoriert
+static unsigned long manualPressStartMs = 0;      // Zeitpunkt seit dem Knopf gedrückt (0 = nicht gedrückt)
+static unsigned long lastFeedEndMs = 0;           // millis() beim letzten Fütterungs-Ende (für 2s Lockout)
+static const unsigned long FEED_PRESS_MIN_MS  = 1000UL;  // Min. Druckdauer für Fütterung
+static const unsigned long FEED_PRESS_MAX_MS  = 3000UL;  // Max. Druckdauer für Fütterung
+static const unsigned long RESET_BEEP_START_MS = 5000UL; // Ab hier piept der Buzzer warnend
+static const unsigned long RESET_TRIGGER_MS    = 10000UL;// Ab hier wird Reset ausgelöst
+static const unsigned long FEED_LOCKOUT_MS     = 2000UL; // Pin-Ignorier-Zeit nach Fütterung
 // Pending-Flags für geplante Fütterungen, falls sie während einer laufenden Fütterung fällig werden
 static bool pendingSched1 = false;
 static bool pendingSched2 = false;
@@ -193,6 +214,23 @@ static bool gCfgFromEeprom = false; // Herkunft: true=aus EEPROM geladen, false=
 // EEPROM-Speicheradresse für Konfiguration
 #define EEPROM_CFG_ADDR 0
 
+// Persistente Fütterungs-Zustände (verhindern Doppel-Fütterung nach Stromausfall)
+#define FEED_STATE_MAGIC 0x4644  // 'DF' = D Feed
+struct FeedState {
+  uint16_t magic;
+  int8_t   lastH;         // -1 = noch nie
+  int8_t   lastM;
+  int8_t   lastS;
+  uint32_t lastSteps;     // 0xFFFFFFFF wenn unbekannt
+  uint8_t  lastSrc;
+  uint8_t  fedToday1;     // 0/1
+  uint8_t  fedToday2;     // 0/1
+  uint8_t  ntpDay;        // gNtpDay zur Tagesidentifikation
+  uint16_t crc;
+};
+
+#define EEPROM_FEEDSTATE_ADDR 200  // sicher hinter KConfig (~16B) + WifiCred (~136B)
+
 bool ntpIsSynced() {
   return gNtpSynced;
 }
@@ -203,6 +241,58 @@ static uint16_t cfgChecksum(const KConfig &c) {
   s += c.h1 + c.m1 + c.h2 + c.m2 + c.active2;
   s += c.steps & 0xFF; s += (c.steps >> 8) & 0xFF; s += (c.steps >> 16) & 0xFF; s += (c.steps >> 24) & 0xFF;
   return (uint16_t)((s & 0xFFFFu) ^ 0xA5A5u);
+}
+
+static uint16_t feedStateChecksum(const FeedState &fs) {
+  uint32_t s = 0;
+  s += (uint8_t)fs.lastH + (uint8_t)fs.lastM + (uint8_t)fs.lastS;
+  s += fs.lastSteps & 0xFF; s += (fs.lastSteps >> 8) & 0xFF;
+  s += (fs.lastSteps >> 16) & 0xFF; s += (fs.lastSteps >> 24) & 0xFF;
+  s += fs.lastSrc + fs.fedToday1 + fs.fedToday2 + fs.ntpDay;
+  return (uint16_t)((s & 0xFFFFu) ^ 0x5A5Au);
+}
+
+// Aktuelle Feed-State-Variablen ins EEPROM schreiben
+static void feedStateSave() {
+  FeedState fs;
+  fs.magic = FEED_STATE_MAGIC;
+  fs.lastH = (int8_t)((lastFeedHour >= -128 && lastFeedHour <= 127) ? lastFeedHour : -1);
+  fs.lastM = (int8_t)((lastFeedMinute >= -128 && lastFeedMinute <= 127) ? lastFeedMinute : -1);
+  fs.lastS = (int8_t)((lastFeedSecond >= -128 && lastFeedSecond <= 127) ? lastFeedSecond : -1);
+  fs.lastSteps = (lastFeedSteps >= 0) ? (uint32_t)lastFeedSteps : 0xFFFFFFFFu;
+  fs.lastSrc = lastFeedSrc;
+  fs.fedToday1 = fedToday1 ? 1 : 0;
+  fs.fedToday2 = fedToday2 ? 1 : 0;
+  fs.ntpDay = gNtpDay;
+  fs.crc = feedStateChecksum(fs);
+  EEPROM.put(EEPROM_FEEDSTATE_ADDR, fs);
+}
+
+// Feed-State aus EEPROM laden (nach Boot, vor erstem Loop)
+static void feedStateLoad() {
+  FeedState fs;
+  EEPROM.get(EEPROM_FEEDSTATE_ADDR, fs);
+  if (fs.magic != FEED_STATE_MAGIC) return;  // unbeschrieben oder defekt
+  if (fs.crc != feedStateChecksum(fs)) {
+    Serial.println(F("FeedState CRC-Fehler – ignoriert."));
+    return;
+  }
+  lastFeedHour = fs.lastH;
+  lastFeedMinute = fs.lastM;
+  lastFeedSecond = fs.lastS;
+  lastFeedSteps = (fs.lastSteps == 0xFFFFFFFFu) ? -1 : (int)fs.lastSteps;
+  lastFeedSrc = fs.lastSrc;
+  fedToday1 = (fs.fedToday1 != 0);
+  fedToday2 = (fs.fedToday2 != 0);
+  // ntpDay erst gültig nach NTP-Sync gesetzt; aus EEPROM in lastKnownDay übernehmen
+  lastKnownDay = fs.ntpDay;
+  Serial.print(F("FeedState geladen: last="));
+  Serial.print(lastFeedHour); Serial.print(':');
+  Serial.print(lastFeedMinute);
+  Serial.print(F(" fedToday1="));
+  Serial.print(fedToday1 ? F("ja") : F("nein"));
+  Serial.print(F(" fedToday2="));
+  Serial.println(fedToday2 ? F("ja") : F("nein"));
 }
 
 // NTP-Paket senden und Antwort auswerten
@@ -227,9 +317,10 @@ static bool ntpSync() {
   ntpUDP.write(packetBuffer, NTP_PACKET_SIZE);
   ntpUDP.endPacket();
 
-  // Auf Antwort warten (max. 2s)
+  // Auf Antwort warten (max. 2s) – mit Watchdog-Refresh
   uint32_t start = millis();
   while (millis() - start < 2000) {
+    watchdogRefresh();
     if (ntpUDP.parsePacket() >= NTP_PACKET_SIZE) {
       ntpUDP.read(packetBuffer, NTP_PACKET_SIZE);
       // Sekunden seit 1900
@@ -248,7 +339,10 @@ static bool ntpSync() {
       gNtpHour = (localEpoch % 86400UL) / 3600;
       gNtpMin  = (localEpoch % 3600UL)  / 60;
       gNtpSec  = localEpoch % 60;
-      gNtpDay  = (uint8_t)((localEpoch / 86400UL) % 31); // Tages-ID für Reset
+      // Tages-ID für Tageswechsel-Erkennung. Modulo 256 (uint8_t-Range): nach 256 Tagen
+      // Offline-Zeit kann es theoretisch zu einer Kollision kommen. Praktisch unkritisch,
+      // da KORN bei längeren Stromausfällen ohnehin neu eingerichtet wird.
+      gNtpDay  = (uint8_t)((localEpoch / 86400UL) & 0xFF);
       gNtpBaseMs = millis();
       gNtpSynced = true;
       ntpUDP.stop();
@@ -598,16 +692,32 @@ void setup() {
   unsigned long serialStart = millis();
   while (!Serial && (millis() - serialStart) < 2000UL) { ; }
 
-  #ifdef WATCHDOG_ENABLED
-    Serial.println(F("Watchdog: DEAKTIVIERT (Debug-Modus)"));
-  #else
-    Serial.println(F("Watchdog: nicht verfügbar (UNO R4)"));
-  #endif
+  // HINWEIS: Watchdog wird erst NACH wifiInit/ntpTrySync aktiviert.
+  // Grund: WiFi.begin() auf UNO R4 kommuniziert mit dem ESP32-S3 WiFi-Coprozessor
+  // und kann intern länger als 4s blockieren, ohne dass wir den Watchdog refreshen
+  // können. Während Boot ist der Nutzer eh anwesend; der Watchdog schützt danach
+  // den 24/7-Betrieb (Loop, Motor, Web-Handler).
+
+  // Hardware-Recovery erfolgt zur LAUFZEIT (siehe loop()): Knopf 10s halten.
+  // Beim Boot brauchen wir keinen separaten Recovery-Modus – nicht mehr Strom trennen.
 
   motorInit();
-  wifiInit();    // Heimnetz oder Einrichtungs-AP
+  wifiInit();    // Heimnetz oder Einrichtungs-AP (kann > 4s blockieren)
   ntpTrySync();  // Zeit holen (nur wenn Heimnetz verbunden)
   webInit();
+
+  // Watchdog JETZT aktivieren (nach allen blockierenden Init-Calls)
+  #ifdef WATCHDOG_R4
+    WDT.begin(WATCHDOG_TIMEOUT_MS);
+    Serial.print(F("Watchdog: AKTIV (UNO R4, "));
+    Serial.print(WATCHDOG_TIMEOUT_MS);
+    Serial.println(F("ms)"));
+  #elif defined(WATCHDOG_AVR)
+    wdt_enable(WDTO_4S);
+    Serial.println(F("Watchdog: AKTIV (AVR, 4s)"));
+  #else
+    Serial.println(F("Watchdog: NICHT VERFÜGBAR"));
+  #endif
 
   // Manuelle Auslösung vorbereiten
   pinMode(MANUAL_TRIGGER_PIN, INPUT_PULLUP);
@@ -618,20 +728,34 @@ void setup() {
   lastStatusMs = millis();
   bootMs = lastStatusMs;
 
-  // Tageswechsel-Erkennung initialisieren
-  if (gNtpSynced) {
-    lastKnownDay = gNtpDay;
-  }
-
   // Konfiguration aus RTC-RAM laden (oder Defaults)
   cfgLoadFromRtcRam();
   cfgApplyToRuntime();
+
+  // FeedState laden (lastFeed*, fedToday1/2, lastKnownDay) – verhindert Doppel-Fütterung nach Stromausfall
+  feedStateLoad();
+
+  // Wenn NTP synchronisiert UND der gespeicherte ntpDay nicht mehr passt → neuer Tag, Marker zurücksetzen
+  if (gNtpSynced && lastKnownDay != gNtpDay) {
+    Serial.println(F("FeedState: Tageswechsel erkannt – fedToday1/2 zurückgesetzt."));
+    fedToday1 = false;
+    fedToday2 = false;
+    lastKnownDay = gNtpDay;
+    feedStateSave();
+  }
+}
+
+// Watchdog-Refresh: einmal pro loop() und während Motorlauf
+void watchdogRefresh() {
+  #ifdef WATCHDOG_R4
+    WDT.refresh();
+  #elif defined(WATCHDOG_AVR)
+    wdt_reset();
+  #endif
 }
 
 void loop() {
-  #ifdef WATCHDOG_ENABLED
-    wdt_reset();
-  #endif
+  watchdogRefresh();
 
   // DNS-Anfragen bearbeiten (Captive Portal im Einrichtungs-AP-Modus)
   dnsHandleRequests();
@@ -672,23 +796,72 @@ void loop() {
     requestImmediateFeed();
   }
 
-  // Hardware-Trigger: Kurzschluss 10↔11 löst aus – robust mit 150ms Hold + 1s Lockout, one-shot bis Release
-  int trig = digitalRead(MANUAL_TRIGGER_PIN); // HIGH=Ruhe (Pullup), LOW=kurzgeschlossen
-  if (trig == LOW) {
-    if (manualLowSinceMs == 0) manualLowSinceMs = now; // Start der Low-Phase
-    // Nur auslösen, wenn stabil ≥150ms LOW, kein Lockout aktiv und noch nicht verbraucht
-    if (!manualConsumed && (now - manualLowSinceMs) >= 150UL && now >= manualLockoutUntilMs && !feedingInProgress) {
-      Serial.println(F("TRIG:MANUAL"));
-      nextFeedSrc = SRC_MANUAL;
-      requestImmediateFeed();
-      manualLockoutUntilMs = now + 1000UL; // 1s Lockout
-      manualConsumed = true;               // bis Release gesperrt
-      // lowSince nicht zurücksetzen – verhindert Mehrfachauslösung solange gedrückt
+  // Hardware-Knopf Pin 10↔11 – State-Machine
+  //   Fütterung:  1-3s drücken & loslassen
+  //   Reset:      ≥10s halten (Buzzer warnt ab 5s)
+  //   Lockout:    während Fütterung und 2s danach → Pin komplett ignoriert
+  {
+    int trig = digitalRead(MANUAL_TRIGGER_PIN); // HIGH=Ruhe (Pullup), LOW=gedrückt
+    bool inFeedLockout = feedingInProgress ||
+        (lastFeedEndMs != 0 && (now - lastFeedEndMs) < FEED_LOCKOUT_MS);
+
+    if (inFeedLockout) {
+      // Während/kurz nach Fütterung: Knopf ignorieren (Schutz gegen Fehlbedienung)
+      // WICHTIG: Buzzer nicht anfassen – das Jagdsignal läuft während der Fütterung
+      manualPressStartMs = 0;
+    } else if (trig == LOW) {
+      // Knopf gedrückt
+      if (manualPressStartMs == 0) {
+        manualPressStartMs = now;
+      }
+      unsigned long heldMs = now - manualPressStartMs;
+
+      // Reset-Warn-Beep im Fenster 5-10s (250ms an/aus)
+      if (heldMs >= RESET_BEEP_START_MS && heldMs < RESET_TRIGGER_MS) {
+        digitalWrite(BUZZER_PIN, ((heldMs / 250UL) % 2UL) ? HIGH : LOW);
+      }
+
+      // Reset bei ≥10s
+      if (heldMs >= RESET_TRIGGER_MS) {
+        digitalWrite(BUZZER_PIN, LOW);
+        Serial.println(F("Hardware-Recovery: 10s erreicht – EEPROM wird gelöscht..."));
+        for (int i = 0; i < 1024; i++) {
+          EEPROM.write(i, 0xFF);
+          if (i % 64 == 0) watchdogRefresh();
+        }
+        // 3 lange Bestätigungs-Piepser
+        for (int i = 0; i < 3; i++) {
+          watchdogRefresh();
+          digitalWrite(BUZZER_PIN, HIGH);
+          delay(300);
+          digitalWrite(BUZZER_PIN, LOW);
+          delay(150);
+        }
+        Serial.println(F("Hardware-Recovery: Reset komplett. Neustart..."));
+        delay(500);
+        NVIC_SystemReset();
+      }
+    } else {
+      // HIGH = Knopf losgelassen (oder nie gedrückt)
+      if (manualPressStartMs != 0) {
+        unsigned long heldMs = now - manualPressStartMs;
+        digitalWrite(BUZZER_PIN, LOW);
+        // Fütterung nur bei 1-3s Druckdauer
+        if (heldMs >= FEED_PRESS_MIN_MS && heldMs <= FEED_PRESS_MAX_MS) {
+          Serial.println(F("TRIG:MANUAL"));
+          nextFeedSrc = SRC_MANUAL;
+          requestImmediateFeed();
+        } else if (heldMs < FEED_PRESS_MIN_MS) {
+          // Zu kurz – ignoriert (entprellt Fehlauslösungen)
+        } else {
+          // Zwischen 3s und 10s losgelassen → bewusst nichts (Reset abgebrochen)
+          Serial.print(F("Knopf nach "));
+          Serial.print(heldMs);
+          Serial.println(F("ms losgelassen – keine Aktion."));
+        }
+        manualPressStartMs = 0;
+      }
     }
-  } else {
-    // HIGH = Ruhe
-    manualLowSinceMs = 0;
-    manualConsumed = false; // Release: nächster Druck erlaubt
   }
 
   // Geplante Fütterungen und Tagesreset
@@ -698,16 +871,16 @@ void loop() {
     int nowSec = nowH_t * 3600 + nowM_t * 60 + nowS_t;
     if (lastNowSec < 0) lastNowSec = nowSec; // Initialisierung beim ersten Durchlauf
 
-    // Tageswechsel erkennen → Marker zurücksetzen
-    uint8_t todayId = (uint8_t)((millis() / 86400000UL) % 256);
+    // Tageswechsel erkennen → Marker zurücksetzen + persistieren
     if (lastKnownDay != gNtpDay) {
       fedToday1 = false;
       fedToday2 = false;
       pendingSched1 = false;
       pendingSched2 = false;
+      lastKnownDay = gNtpDay;
+      feedStateSave();  // Tageswechsel persistieren
       // Hinweis: lastNowSec NICHT zurücksetzen – Crossing-Logik ist wrap-aware
     }
-    lastKnownDay = gNtpDay;
 
     // Zielzeiten (Sekunden und Minuten)
     int nowMin = nowH_t * 60 + nowM_t;
@@ -904,5 +1077,9 @@ void requestImmediateFeed() {
   // Optional: Stepper-Reset-Hook
   motorReset();
 
+  // Persistenz: lastFeed-Daten ins EEPROM (verhindert Doppel-Fütterung nach Stromausfall)
+  feedStateSave();
+
   feedingInProgress = false;
+  lastFeedEndMs = millis();  // 2s Lockout für Hardware-Knopf
 }
