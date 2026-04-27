@@ -31,21 +31,25 @@
 #include <AccelStepper.h>
 #include <RTClib.h>
 #include <Wire.h>
+#ifdef __AVR__
+#include <avr/wdt.h>
+#endif
 
 // ============================================================================
 // KONFIGURATION - HIER ALLE PARAMETER EINSTELLEN
 // ============================================================================
 
 // FÜTTERUNGSZEITEN (24h Format)
-const int FUETTERUNG_STUNDE_1 = 17;   // Erste Fütterung um 16:58 Uhr
-const int FUETTERUNG_MINUTE_1 = 13;
-const int FUETTERUNG_STUNDE_2 = 19;   // Zweite Fütterung um 19:00 Uhr  
-const int FUETTERUNG_MINUTE_2 = 2;
+const int FUETTERUNG_STUNDE_1 = 07;   // Erste Fütterung um 07:00 Uhr
+const int FUETTERUNG_MINUTE_1 = 00;
+const int FUETTERUNG_STUNDE_2 = 14;   // Zweite Fütterung um 16:00 Uhr  
+const int FUETTERUNG_MINUTE_2 = 00;
 
 // MOTORPARAMETER
 const int MOTOR_BESCHLEUNIGUNG = 100;  // Beschleunigung in Steps/s²
-const int MOTOR_RPM = 100;             // Geschwindigkeit in Umdrehungen/Minute
-const int MOTOR_SCHRITTE = 6000;       // Schritte pro Fütterung (30 Umdrehungen)
+// Zeitbasierte Dosierung wie in Rev3: feste Schrittfrequenz + Dauer in Sekunden
+const int SCHRITTFREQUENZ = 1000;      // Steps pro Sekunde (fix)
+const int FUETTERUNG_DAUER_SEK = 5;    // Fütterungsdauer in Sekunden (1–60 s)
 const bool MOTOR_RECHTS = false;        // true = Rechts (CW), false = Links (CCW)
 
 // TIMING-PARAMETER
@@ -60,7 +64,7 @@ const int BUZZER_TON_DAUER = 1000;     // Dauer eines Tons in ms
 const int BUZZER_PAUSE_DAUER = 200;    // Pause zwischen Tönen in ms
 
 // AUTOMATISCHE ZEITSYNCHRONISATION
-const bool ZEIT_EINSTELLEN = true;    // true = Zeit wird bei jedem Upload automatisch korrigiert
+const bool ZEIT_EINSTELLEN = false;    // Nur setzen, wenn lostPower() oder explizit gewünscht
 
 // ============================================================================
 // PIN-DEFINITIONEN
@@ -87,18 +91,26 @@ int letzter_tag = -1;            // Letzter Tag für Tagesreset
 static int letzte_sekunde = -1;  // Letzte Sekunde für Zeitausgabe
 
 void setup() {
+  // Pins früh konfigurieren, bevor Ausgänge erstmals genutzt werden
+  pinMode(ENA_PIN, OUTPUT);
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  // Anfangszustand der Ausgänge
+  digitalWrite(ENA_PIN, LOW);
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
   // ===================
   // POWERUP-SIGNALTON: 2x 1 Sekunde mit 1 Sekunde Pause
   // ===================
   // Signalisiert, dass der Arduino frisch mit Strom versorgt wurde (Powerup)
   // 1. Buzzer 1 Sekunde AN
   digitalWrite(BUZZER_PIN, HIGH);   // Buzzer EIN
-  delay(1000);                      // 1 Sekunde warten
+  safeDelay(1000);                  // 1 Sekunde warten
   digitalWrite(BUZZER_PIN, LOW);    // Buzzer AUS
-  delay(1000);                      // 1 Sekunde Pause
+  safeDelay(1000);                  // 1 Sekunde Pause
   // 2. Buzzer 1 Sekunde AN
   digitalWrite(BUZZER_PIN, HIGH);   // Buzzer EIN
-  delay(1000);                      // 1 Sekunde warten
+  safeDelay(1000);                  // 1 Sekunde warten
   digitalWrite(BUZZER_PIN, LOW);    // Buzzer AUS
   // ===================
 
@@ -108,23 +120,49 @@ void setup() {
   Serial.println("🐓 K.O.R.N. Fütterungsautomat gestartet!");
   Serial.println("===========================================");
   
-  // RTC initialisieren
+  // I2C starten und RTC initialisieren
+  Wire.begin();
+#if defined(WIRE_HAS_TIMEOUT)
+  Wire.setWireTimeout(3000, true); // 3s Timeout, bei Fehlern Wire zurücksetzen
+#endif
   if (!rtc.begin()) {
     Serial.println("FEHLER: DS3231 nicht gefunden!");
     Serial.println("Prüfe Verdrahtung:");
     Serial.println("VCC → 3.3V, GND → GND, SDA → A4, SCL → A5");
-    while (1) delay(1000);  // Endlosschleife bei RTC-Fehler
+    while (1) safeDelay(1000);  // Endlosschleife bei RTC-Fehler (Watchdog-freundlich)
   }
   
-  // Zeit und Datum einstellen (automatisch bei jedem Upload)
-  if (ZEIT_EINSTELLEN) {
+#ifdef __AVR__
+  // Watchdog auf 2s aktivieren
+  wdt_enable(WDTO_2S);
+#endif
+  
+  // Zeit und Datum einstellen (automatisch bei Bedarf)
+  bool rtc_verlust = false;
+  if (rtc.lostPower()) {
+    rtc_verlust = true;
+    Serial.println("⚠️ RTC verlor Versorgung – Zeit wird neu gesetzt.");
+  }
+  if (rtc_verlust || ZEIT_EINSTELLEN) {
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    Serial.println("📡 DS3231 RTC erfolgreich initialisiert");
-    Serial.println("⚡ Automatische Zeit- und Datum-Synchronisation aktiviert");
-    
-    // Synchronisiertes Datum anzeigen
+    Serial.println("📡 DS3231 RTC initialisiert / Zeit gesetzt");
+  } else {
+    Serial.println("⏱️ RTC-Zeit bleibt unverändert (kein Verlust erkannt)");
+  }
+  // Sanity-Check: Falls RTC-Zeit offensichtlich hinter der Build-Zeit liegt, angleichen
+  {
+    DateTime build(F(__DATE__), F(__TIME__));
+    DateTime nowCheck = rtc.now();
+    if (nowCheck.unixtime() + 60 < build.unixtime()) { // >60 s hinter Build-Zeit
+      Serial.println("⚠️ RTC-Zeit liegt vor Build-Zeit – setze auf Build-Zeit.");
+      rtc.adjust(build);
+    }
+  }
+  
+  // Synchronisierte/aktuelle Zeit einmalig anzeigen
+  {
     DateTime jetzt = rtc.now();
-    Serial.print("📅 Datum synchronisiert: ");
+    Serial.print("📅 Datum: ");
     Serial.print(jetzt.day(), DEC);
     Serial.print(".");
     Serial.print(jetzt.month(), DEC);
@@ -136,19 +174,11 @@ void setup() {
   // Aktuelle Zeit anzeigen
   zeige_aktuelle_zeit();
   
-  // Motor konfigurieren
-  stepper.setMaxSpeed(MOTOR_RPM * 200);        // 200 Steps = 1 Umdrehung
+  // Motor konfigurieren (zeitbasierte Dosierung): feste Schrittfrequenz
+  stepper.setMaxSpeed(SCHRITTFREQUENZ);
   stepper.setAcceleration(MOTOR_BESCHLEUNIGUNG);
   
-  // Pins konfigurieren
-  pinMode(ENA_PIN, OUTPUT);
-  pinMode(RELAY_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  
-  // Motor und Relais initial ausschalten
-  digitalWrite(ENA_PIN, LOW);
-  digitalWrite(RELAY_PIN, LOW);
-  digitalWrite(BUZZER_PIN, LOW);
+  // Pins wurden bereits zu Beginn von setup() konfiguriert und initialisiert
   
   Serial.println("🎺 Upload erfolgreich - Fanfare wird abgespielt...");
   fanfare_abspielen();
@@ -165,6 +195,10 @@ void setup() {
 }
 
 void loop() {
+  // Watchdog regelmäßig füttern
+#ifdef __AVR__
+  wdt_reset();
+#endif
   DateTime jetzt = rtc.now();
   
   // Zeitausgabe alle 30 Sekunden (bei Sekundenwechsel)
@@ -188,7 +222,13 @@ void loop() {
     Serial.print(jetzt.month(), DEC);
     Serial.print(".");
     Serial.print(jetzt.year(), DEC);
-    Serial.println(" - Fütterungsflags zurückgesetzt");
+    Serial.print(" ");
+    if (jetzt.hour() < 10) Serial.print("0");
+    Serial.print(jetzt.hour());
+    Serial.print(":");
+    if (jetzt.minute() < 10) Serial.print("0");
+    Serial.print(jetzt.minute());
+    Serial.println(" - Flags zurückgesetzt (Heartbeat)");
   }
   
   // Erste Fütterungszeit prüfen - FÜTTERUNG
@@ -215,7 +255,7 @@ void loop() {
   
   // 30 Sekunden warten bevor nächste Zeitprüfung
   // Verhindert mehrfache Fütterung in derselben Minute
-  delay(30000);
+  safeDelay(30000);
 }
 
 // ============================================================================
@@ -228,30 +268,41 @@ void fuetterungsvorgang() {
   
   // 3 Sekunden warten nach Buzzer-Warnung
   Serial.println("⏱️ 3 Sekunden warten...");
-  delay(3000);
+  safeDelay(3000);
   
   Serial.println("→ Relais aktivieren...");
   digitalWrite(RELAY_PIN, HIGH);           // Motortreiber mit Strom versorgen
-  delay(RELAIS_VERZOEGERUNG);              // Warten bis Treiber bereit
+  safeDelay(RELAIS_VERZOEGERUNG);          // Warten bis Treiber bereit
   
   Serial.println("→ Motor aktivieren...");
   digitalWrite(ENA_PIN, HIGH);             // Motor aktivieren
   
+  // Schritte für diese Fütterung aus Dauer berechnen (1–60 s)
+  const int sek = constrain(FUETTERUNG_DAUER_SEK, 1, 60);
+  const long schritte = (long)sek * SCHRITTFREQUENZ;
   Serial.print("→ Motor läuft ");
-  Serial.print(MOTOR_SCHRITTE);
+  Serial.print(sek);
+  Serial.print(" s = ");
+  Serial.print(schritte);
   Serial.println(" Schritte...");
   
   if (MOTOR_RECHTS) {
-    stepper.moveTo(MOTOR_SCHRITTE);         // Bewegung im Uhrzeigersinn
+    stepper.move(schritte);                // relative Bewegung im Uhrzeigersinn
   } else {
-    stepper.moveTo(-MOTOR_SCHRITTE);        // Bewegung gegen Uhrzeigersinn
+    stepper.move(-schritte);               // relative Bewegung gegen Uhrzeigersinn
   }
-  stepper.runToPosition();                 // Bewegung ausführen (blockierend)
+  // Bewegung ausführen (blockierend), dabei Watchdog füttern
+  while (stepper.distanceToGo() != 0) {
+    stepper.run();
+#ifdef __AVR__
+    wdt_reset();
+#endif
+  }
   
   Serial.println("→ Motor stoppen...");
   digitalWrite(ENA_PIN, LOW);              // Motor deaktivieren
   
-  delay(MOTOR_PAUSE);                      // Kurze Pause
+  safeDelay(MOTOR_PAUSE);                  // Kurze Pause
   
   Serial.println("→ Relais deaktivieren...");
   digitalWrite(RELAY_PIN, LOW);            // Motortreiber stromlos schalten
@@ -268,11 +319,11 @@ void buzzer_warnung() {
     
     // Aktiven Buzzer mit HIGH-Signal aktivieren
     digitalWrite(BUZZER_PIN, HIGH);      // Buzzer EIN
-    delay(BUZZER_TON_DAUER);             // 1 Sekunde Ton
+    safeDelay(BUZZER_TON_DAUER);         // 1 Sekunde Ton
     digitalWrite(BUZZER_PIN, LOW);       // Buzzer AUS
     
     if (i < BUZZER_ANZAHL_TOENE - 1) {   // Pause nur zwischen Tönen, nicht nach dem letzten
-      delay(BUZZER_PAUSE_DAUER);         // 0,2 Sekunden Pause
+      safeDelay(BUZZER_PAUSE_DAUER);     // 0,2 Sekunden Pause
     }
   }
   
@@ -288,9 +339,9 @@ void fanfare_abspielen() {
   
   for (int i = 0; i < 5; i++) {
     digitalWrite(BUZZER_PIN, HIGH);  // Buzzer EIN
-    delay(300);                     // 0,3 Sekunden Ton
+    safeDelay(300);                 // 0,3 Sekunden Ton
     digitalWrite(BUZZER_PIN, LOW);   // Buzzer AUS
-    delay(100);                     // 0,1 Sekunden Pause
+    safeDelay(100);                 // 0,1 Sekunden Pause
   }
   
   Serial.println("→ Fanfarensignal beendet");
@@ -327,6 +378,19 @@ void zeige_aktuelle_zeit() {
   Serial.print(" | Temp: ");
   Serial.print(rtc.getTemperature());
   Serial.println("°C");
+}
+
+// ============================================================================
+// ZEITHELFER: Watchdog-freundliche Verzögerung
+// ============================================================================
+void safeDelay(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+#ifdef __AVR__
+    wdt_reset();
+#endif
+    delay(50);
+  }
 }
 
 void formatiere_zeit(int stunde, int minute) {

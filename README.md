@@ -18,10 +18,33 @@ Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter)
 
 Resision  wurde entwickelt als supersimple autarke stromsparende Version ohne Extrafeatures.
 
-## Revision 3 basiert auf den CAD Dateien von Rev.2 und eine Steuerung mit ARDUINO Uno R4 mit Wifi (Stand August 25 noch in der Entwicklung!!)
+## Revision 3 basiert auf den CAD Dateien von Rev.2 und einer Steuerung mit ARDUINO Uno R4 WiFi ✅ Fertig
 
-Revision 3 wurde entwickelt als autarke Off-Grid Funktion. Ein WLAN mit Internetverbindung und somit die Option von überall auf der Welt mittels VPN zu füttern ist hier nicht vorgesehen. Stattdessen kann KORN hier mitten im Feld ohne eigene Internetverbindung installiert werden. Der Arduino UNO R4 spannt dann einen eigenen WLAN Accesspoint auf. Mit diesem kann man sich dann mittels Smartphone verbinden. 
-Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellungen zurücksetzen. Dann mit dem Wlan KORN verbinden und im Browser 192.168.4.1 öffnen. Voila, fertig ist das eigene CCCC (ChickenCoopControlCenter) 🥳 😉
+Revision 3 wurde entwickelt als autarke Off-Grid Funktion. Ein WLAN mit Internetverbindung ist hier nicht vorgesehen.
+Stattdessen kann KORN mitten im Feld ohne eigene Internetverbindung installiert werden. Der Arduino UNO R4 spannt einen eigenen WLAN Accesspoint auf. Mit diesem kann man sich mittels Smartphone verbinden.
+Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellungen zurücksetzen. Dann mit dem WLAN "KORN" verbinden und im Browser 192.168.4.1 öffnen. Voila, fertig ist das eigene CCCC (ChickenCoopControlCenter) 🥳 😉
+
+## Revision 3.5 basiert auf Rev.3 (Arduino UNO R4 WiFi) mit neuer WLAN-Logik ✅ Fertig
+
+Revision 3.5 verwendet die gleiche Hardware und CAD wie Rev.3/Rev.4, ändert jedoch den WLAN-Betrieb grundlegend:
+Statt eines eigenen Access Points verbindet sich KORN nun mit einem vorhandenen Heimnetz (WLAN-Router).
+
+**Neue Features:**
+- **DHCP-Hostname "KORN"**: Im Router als Gerät "KORN" sichtbar, direkt erreichbar unter `http://korn` (FritzBox, Speedport, OpenWRT)
+- **Captive Portal**: Automatische Browser-Öffnung bei Einrichtungs-AP (`KORN-Setup`, PW: `Chaosfeeder`)
+- **NTP-Zeitsteuerung**: Internetzeit statt DS1302 RTC (mit Sommer-/Winterzeit)
+- **Buzzer-Jagdsignal**: Akustisches Signal "Zum Essen" (3/8-Takt) während der Fütterung
+- **WPA2-Unterstützung** mit Passwort-Validierung (8-63 Zeichen)
+
+**Ablauf:** Beim ersten Start oder bei fehlendem WLAN öffnet der Arduino einen temporären Einrichtungs-AP. Nach Speichern der Zugangsdaten verbindet sich KORN automatisch mit dem Heimnetz.
+
+📖 **Detaillierte Dokumentation:** [`KORN_Rev3.5/README_REV3.5.md`](./KORN_Rev3.5/README_REV3.5.md)
+
+## Revision 4 basiert auf Rev.3/3.5 CAD mit neuem Controller: Raspberry Pi Pico W (Geplant)
+
+Revision 4 übernimmt die überarbeiteten CAD-Dateien (Wendel 4.0, neuer Achsträger, Arduino-Träger als Pico-Träger).
+Als Controller wird ein Raspberry Pi Pico W eingesetzt. Die Software wird in MicroPython neu geschrieben.
+Ebenfalls geplant ist eine eigene Platine für eine sauberere Verkabelung und Befestigung.
 
 
 
