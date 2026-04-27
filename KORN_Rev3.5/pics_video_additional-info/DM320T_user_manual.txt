@@ -1,0 +1,346 @@
+                  User Manual
+                          For
+                DM320T
+          2-Phase Digital Stepper Drive
+Address: 15-4, #799 Hushan Road, Jiangning, Nanjing, China
+                  Tel: 0086-2587156578
+            Web: www.omc-stepperonline.com
+             Sales: sales@stepperonline.com
+          Support: technical@stepperonline.com
+                                                                                                                                          Digital Stepper Driver DM320T
+                                                           Table of Contents
+1. Introductions.................................................................................................................................................................... 1
+     1.1 Features.................................................................................................................................................................. 1
+     1.2 Applications............................................................................................................................................................ 1
+2. Specifications....................................................................................................................................................................1
+     2.1 Electrical Specifications.......................................................................................................................................... 1
+     2.2 Environment..........................................................................................................................................................2
+     2.3 Mechanical Specifications...................................................................................................................................... 2
+     2.4 Elimination of Heat................................................................................................................................................. 2
+3. Connection Pin Assignments and LED Indication........................................................................................................... 3
+     3.1 Connector P1 Configurations.................................................................................................................................3
+     3.2 Connector P2 Configurations.................................................................................................................................3
+     3.3 LED Light Indication................................................................................................................................................ 4
+4. Control Signal Connector (P1) Interface..........................................................................................................................4
+5. Motor Connection............................................................................................................................................................ 5
+     5.1 Connections of 4-lead Motor................................................................................................................................. 5
+     5.2 Connections of 6-lead Motor................................................................................................................................. 5
+          5.2.1 Half Coil Configuration...............................................................................................................................5
+          5.2.2 Full Coil Configuration................................................................................................................................ 5
+     5.3 Connections of 8-lead Motor................................................................................................................................. 6
+          5.3.1 Series Connection....................................................................................................................................... 6
+          5.3.2 Parallel Connection..................................................................................................................................... 6
+6. Power Supply Selection................................................................................................................................................... 7
+     6.1 Regulated or Unregulated Power Supply............................................................................................................... 7
+     6.2 Power Supply Sharing............................................................................................................................................. 7
+     6.3 Selecting Supply Voltage........................................................................................................................................7
+7. DIP Switch Configurations................................................................................................................................................7
+     7.1 Microstep Resolution Configurations..................................................................................................................... 8
+     7.2 Current Configurations........................................................................................................................................... 8
+          7.2.1 Dynamic Current Configurations................................................................................................................8
+          7.2.2 Standstill Current Configuration................................................................................................................ 8
+     7.3 Automatic Motor Matching & Self Configuration.................................................................................................. 9
+8. Wiring Notes....................................................................................................................................................................9
+9. Typical Connection..........................................................................................................................................................9
+10. Sequence Chart of Control Signals.............................................................................................................................. 10
+11. Protection Functions.................................................................................................................................................... 10
+12. Troubleshooting........................................................................................................................................................... 11
+                                                                                               Digital Stepper Driver DM320T
+1. Introductions
+The DM320T is a digital stepper drive with simple design and easy setup. By implementing advanced stepper control
+technology, this stepper drive is able to power 2-phase and 4 phase stepper motors smoothly with optimal torque and
+low motor heating & noise. Its operating voltage is 10-30VDC and it can output up to 2.2A current. All the micro step
+and output current are done via DIP switches. Therefore, the DM320T are ideal choices for applications requiring
+simple step & direction control of NEMA11, 14, 16, 17 stepper motors.
+  1.1 Features
+     Anti-Resonance for optimal torque, extra smooth motion, low motor heating and noise
+     Motor auto-identification and parameter auto-configuration for optimal torque from wide-range motors
+     Step & direction (PUL/DIR) control
+     Multi-Stepping for smooth motor movement
+     Optically isolated inputs
+     Input voltage 10-30VDC
+     8 selectable micro-step resolutions of 400-12800 via DIP switches
+     8 selectable output current settings of 0.3 – 2.2A via DIP switches
+     Soft-start with no “jump” when powered on
+     Pulse input frequency up to 60 KHz.
+     Automatic idle-current reduction
+     Protections for over-voltage and over-current
+1.2 Applications
+The DM320T stepper drive are designed to power 2 phase (1.8) or 4-phase(0.9) NEMA11, 14, 16, 17 hybrid stepper
+motors. It can be easily adopted in many industries (CNC, medical, automation, packaging...), such as X-Y tables,
+engraving machines, labeling machines, mills, plasma, laser cutters, pick and place devices, and so on. Its excellent
+performance, simple design, and easy setup make it ideal for many step & direction control type applications.
+2. Specifications
+  2.1 Electrical Specifications
+                                                                           DM320T
+             Parameters
+                                             Min                   Typical                Max                      Unit
+           Output Current                    0.3                      -              2.2 (1.6 RMS)                  A
+           Supply Voltage                     10                     24                    30                      VDC
+         Logic signal current                  7                     10                    16                      mA
+        Pulse input frequency                  0                      -                    60                      kHz
+         Minimal pulse width                  7.5                     -                     -                       μS
+      Minimal direction setup                 7.5                     -                     -                       μS
+         Isolation resistance                100                                                                   MΩ
+                                                              1
+                                                                                           Digital Stepper Driver DM320T
+2.2 Environment
+             Cooling                                     Natural Cooling or Forced cooling
+                                        Environment                      Avoid dust, oil fog and corrosive gases
+                                    Ambient Temperature                       0°C - 65°C (32°F - 149°F)
+   Operating Environment                  Humidity                                 40%RH－90%RH
+                                    Operating Temperature                     0°C - 50°C (32°F - 122°F)
+                                          Vibration                               10-50Hz / 0.15mm
+     Storage Temperature                                    -20°C - 65°C (-4°F - 149°F)
+             Weight                                            Approx. 90g (3.5 oz)
+2.3 Mechanical Specifications
+(unit: mm [1inch=25.4mm])
+                                        Figure 1: Mechanical specifications
+                             * Side mounting recommended for better heat dissipation
+2.4 Elimination of Heat
+    DM320T reliable working temperature should be < 60℃ (140°F)
+    It is recommended to mount the drive vertically to maximize heat sink area. Use forced cooling method to cool if
+     necessary.
+                                                          2
+                                                                                                  Digital Stepper Driver DM320T
+3. Connection Pin Assignments and LED Indication
+The DM320T has two connector blocks P1&P2 (see above picture). P1 is for control signals connections, and P2 is for
+power and motor connections. The following tables are brief descriptions of the two connectors. More detailed
+descriptions of the pins and related issues are presented in section 4, 5, 9.
+3.1 Connector P1 Configurations
+       Pin Function                                                        Details
+                            Pulse signal: Pulse active at rising edge; 4-5V when PUL-HIGH, 0-0.5V when PUL-LOW.
+            PUL             Minimal pulse width of 7.5μs. Add a resistor for current-limiting at +12V or +24V input logic
+                            voltage (1K for +12V, 2k for +24V). The same as DIR and ENA signals.
+                            DIR signal: This signal has low/high voltage levels to represent two directions of motor
+            DIR             rotation.. Minimal direction setup time of 5μs. Also swapping the connection of two wires
+                            of a coil (e.g. A+ and A-) to the drive will reverse motor direction.
+                            Opto-coupler power supply, and the typical voltage is +5V. Series connect resistors (at the
+           OPTO
+                            PUL, DIR, ENA terminals) for current-limiting when +12V or +24V used.
+                            Enable signal: This signal is used for enabling/disabling the drive. High level +5V (NPN
+                            control signal) for enabling the drive and low level for disabling the drive. NPN and
+            ENA
+                            Differential control signals are on the contrary, namely Low level for enabling.
+                            By default it is left UNCONNECTED (ENABLED).
+   !
+  Notice
+           Notes: (1) shielding control signal wires is suggested;
+                  (2) To avoid interference, don’t tie PUL/DIR control signal and motor wires together
+3.2 Connector P2 Configurations
+       Pin Function                                                        Details
+           GND             Power supply ground connection.
+           +Vdc            Power supply positive connection. Suggest 24VDC power supply voltage
+          A+, A-           Motor Phase A connections. Connect motor A+ wire to A+ Pin; motor A- wire to A-
+           B+, B-          Motor Phase B connections. Connect motor B+ wire to B+ Pin; motor B- wire to B-
+                                                                 3
+                                                                                           Digital Stepper Driver DM320T
+    !
+  Warning
+          Warning: Don’t plug or unplug the P1 & P2 terminal block to avoid drive damage or injury when DM320T
+                    is powered on.
+3.3 LED Light Indication
+There are two LED lights for DM320T. The GREEN one is the power indicator which will be always on generally. The
+RED one is a protection indicator which will flash 1-2 times in a 3-second period, when protection enabled for a
+DM320T. Different number of flashes indicates different protection type (read section 11 for detail).
+4. Control Signal Connector (P1) Interface
+The DM320T can accept differential and single-ended inputs (including open-collector and NPN output). The DM320T
+has 3 optically isolated logic inputs which are located on connector P1 to accept line drive control signals. These
+inputs are isolated to minimize or eliminate electrical noises coupled with the drive control signals. Recommend using
+line drive control signals to increase noise immunity for the drive in interference environments. In the following
+figures, connections to open-collector and NPN signals are illustrated.
+                             Figure 2: Connections to open-collector signal (common-anode)
+                                    Figure 3: Connections to difference control signal
+                                                            4
+                                                                                               Digital Stepper Driver DM320T
+5. Motor Connection
+The DM320T can drive 2-phase and 4-pahse bipolar hybrid stepper motors with 4, 6, or 8 wires.
+5.1 Connections of 4-lead Motor
+The 4 lead motors are the least flexible and easy to connect. And the Speed – torque of motor depends on winding
+inductance. The output current from drive that is multiply the specified phase current by 1.4 to determine the peak
+output current.
+                                            Figure 4: 4-lead Motor Connections
+5.2 Connections of 6-lead Motor
+Like 8 lead stepping motors, 6 lead motors have two configurations available for high speed or high torque operations.
+The higher speed configuration, or half coil, is described, because it uses one half of the motor’s inductor windings.
+The higher torque configuration, or full coil, uses the full coil windings.
+5.2.1 Half Coil Configuration
+As previously stated, the half coil configuration uses 50% of the motor phase windings. This gives lower inductance,
+hence, lower torque output. Like the parallel connection of 8 lead motor, the torque output will be more stable at
+higher speeds. This configuration is also referred to as half chopper. In setting the drive output current multiply the
+specified per phase (or unipolar) current rating by 1.4 to determine the peak output current.
+                               Figure 5: 6-lead motor half coil (higher speed) connections
+5.2.2 Full Coil Configuration
+The full coil configuration on a six lead motor should be used in applications where higher torque at lower speed is
+desired. This configuration is also referred to as full copper. In full coil mode, the motors should be run at only 70% of
+their rated current to prevent overheating.
+                                                               5
+                                                                                             Digital Stepper Driver DM320T
+                                Figure 6: 6-lead motor full coil (higher torque) connections
+5.3 Connections of 8-lead Motor
+8 lead motors offer a high degree of flexibility to the system designer in that they may be connected in series or
+parallel, thus satisfying a wide range of applications.
+5.3.1 Series Connection
+A series motor configuration would typically be used in applications where a higher torque at lower speed is required.
+Because this configuration has the most inductance, the performance will start to degrade at higher speed. In series
+mode, the motors should also be run at only 70% of their rated current to prevent overheating.
+                                         Figure 7: 8-lead motor series connections
+5.3.2 Parallel Connection
+An 8 lead motor in a parallel configuration offers a more stable, but lower torque at lower speeds. But because of the
+lower inductance, there will be higher torque at higher speeds. Multiply the phase (or unipolar) current rating by 1.96,
+or the bipolar current rating by 1.4, to determine the peak output current.
+                                        Figure 8: 8-lead motor parallel connections
+                                                              6
+                                                                                            Digital Stepper Driver DM320T
+6. Power Supply Selection
+The DM320T can power medium and small size stepping motors (frame size from NEMA11 to 17). To get good driving
+performances, it is important to select supply voltage and output current properly. Generally speaking, supply voltage
+determines the high speed performance of the motor, while output current determines the output torque of the
+driven motor (particularly at lower speed). Higher supply voltage will allow higher motor speed to be achieved, at the
+price of more noise and heating. If the motion speed requirement is low, it’s better to use lower supply voltage to
+decrease noise, heating and improve reliability.
+6.1 Regulated or Unregulated Power Supply
+Both regulated and unregulated power supplies can be used to supply the drive. However, unregulated power
+supplies are preferred due to their ability to withstand current surge and fast response for current change. If you
+prefer to a regulated power supply, it is suggested to choose such a power supply specially designed for stepper/servo
+controls Or, in the case when only normal switching power supplies are available, it is important to use “OVERSIZE”
+high current output rating power supplies (for example, using a 4A power supply for 3A stepper motor) to avoid
+problems such as current clamp. On the other hand, if unregulated supply is used, one may use a power supply of
+lower current rating than that of motor (typically 50% ～ 70% of motor current). The reason is that the drive draws
+current from the power supply capacitor of the unregulated supply only during the ON duration of the PWM cycle,
+but not during the OFF duration. Therefore, the average current withdrawn from power supply is considerably less
+than motor current. For example, two 3A motors can be well supplied by one power supply of 4A rating.
+6.2 Power Supply Sharing
+Multiple DM320T drives can share one power supply to reduce cost, if that power supply has enough power capacity.
+To avoid cross interference, connect each stepper drive directly to the shared power supply separately. To avoid cross
+interference, DO NOT daisy-chain connect the power supply input pins of the Drivers. Instead connect them to power
+supply separately.
+6.3 Selecting Supply Voltage
+The DM320T is designed to operate within 10-30VDC voltage input. When selecting a power supply, besides voltage
+from the power supply power line voltage fluctuation and back EMF voltage generated during motor deceleration
+needs also to be taken into account. Ideally it is suggested to use a power supply with the output voltage of 24VDC,
+leaving room for power line voltage fluctuation and back-EMF.
+Higher supply voltage can increase motor torque at higher speeds, thus helpful for avoiding losing steps. However,
+higher voltage may cause bigger motor vibration at lower speed, and it may also cause over-voltage protection or
+even drive damage. Therefore, it is suggested to choose only sufficiently high supply voltage for intended applications.
+7. DIP Switch Configurations
+This drive uses an 6-bit DIP switch to set microstep resolution, and motor operating current, as shown below:
+                                                             7
+                                                                                             Digital Stepper Driver DM320T
+7.1 Microstep Resolution Configurations
+Microstep resolution is set by SW4, 5, 6 of the DIP switches as shown in the following table:
+          Microstep               Steps/rev.(for 1.8°motor)           SW4                 SW5                   SW6
+               2                              400                      ON                  ON                    ON
+               4                              800                     OFF                  ON                    ON
+               8                             1600                      ON                 OFF                    ON
+              16                             3200                     OFF                 OFF                    ON
+              32                             6400                      ON                  ON                   OFF
+              64                            12800                     OFF                  ON                   OFF
+              20                             4000                      ON                 OFF                   OFF
+              40                             8000                     OFF                 OFF                   OFF
+7.2 Current Configurations
+For a given motor, higher drive current will make the motor to output more torque, but at the same time causes more
+heating in the motor and drive. Therefore, output current is generally set to be such that the motor will not overheat
+for long time operation. Since parallel and serial connections of motor coils will significantly change resulting
+inductance and resistance, it is therefore important to set drive output current depending on motor phase current,
+motor leads and connection methods. Phase current rating supplied by motor manufacturer is important in selecting
+drive current, however the selection also depends on leads and connections.
+The first three bits (SW1, 2, 3) of the DIP switch are used to set the dynamic current. Select a setting closest to your
+motor’s required current.
+7.2.1 Dynamic Current Configurations
+        Peak Current                    RMS Current                   SW1                 SW2                   SW3
+             0.3A                           0.21A                      ON                  ON                    ON
+             0.5A                           0.35A                     OFF                  ON                    ON
+             0.7A                           0.49A                      ON                 OFF                    ON
+             1.0A                           0.71A                     OFF                 OFF                    ON
+             1.3A                           0.92A                      ON                  ON                    OFF
+             1.6A                           1.13A                     OFF                  ON                    OFF
+             1.9A                           1.34A                      ON                 OFF                    OFF
+             2.2A                           1.56A                     OFF                 OFF                    OFF
+Notes: Due to motor inductance, the actual current in the coil may be smaller than the dynamic current setting,
+particularly under high speed condition.
+7.2.2 Standstill Current Configuration
+The standstill current is set to be 50% of the selected output current. It means standstill current automatically
+reduced to 50% of the selected dynamic current 0.4 second after the last pulse.
+                                                            8
+                                                                                               Digital Stepper Driver DM320T
+7.3 Automatic Motor Matching & Self Configuration
+When powered on a DM320T will automatically configure itself with the best settings to match the driven stepper
+motor for optimal performance. No action is needed.
+8. Wiring Notes
+    In order to improve anti-interference performance of the drive, it is recommended to use twisted pair shield
+     cable.
+    To prevent noise incurred in PUL/DIR signal, pulse/direction signal wires and motor wires should not be tied up
+     together. It is better to separate them by at least 10 cm, otherwise the disturbing signals generated by motor will
+     easily disturb pulse direction signals, causing motor position error, system instability and other failures.
+    If only one power supply serves multiple DM320T drives, separately connecting the drives to the power supply is
+     recommended instead of daisy-chaining.
+ It is prohibited to pull and plug connector P2 while the drive is powered ON, because there is high current
+     flowing through motor coils (even when motor is at standstill). Pulling or plugging connector P2 with power on
+     will cause extremely high back-EMF voltage surge, which may damage the drive.
+9. Typical Connection
+A complete stepping system should include stepping motor, stepping drive, power supply and controller (pulse
+generator). A typical connection is shown as figure 9.
+                                                Figure 9: Typical connection
+                                                              9
+                                                                                              Digital Stepper Driver DM320T
+10. Sequence Chart of Control Signals
+In order to avoid some fault operations and deviations, PUL, DIR and ENA should abide by some rules, shown as
+following diagram:
+                                        Figure 10: Sequence chart of control signals
+Remark:
+      a)   t1: ENA must be ahead of DIR by at least 5s. Usually, ENA+ and ENA- are NC (not connected). See
+           “Connector P1 Configurations” for more information.
+      b)   t2: DIR must be ahead of PUL effective edge by 5s to ensure correct direction;
+      c)   t3: Pulse width not less than 7.5s;
+      d)   t4: Low level width not less than 7.5s.
+11. Protection Functions
+To improve reliability, the drive incorporates some built-in protections features.
+              Time(s) of
+  Priority                            Sequence wave of red LED                               Description
+                 Blink
+                                                                           Over-current protection activated when peak
+    1st            1
+                                                                           current exceeds the limit.
+                                                                           Over-voltage protection activated when drive
+    2nd            2
+                                                                           working voltage is greater than 34VDC
+    3rd            3                                                       Reserved.
+When above protections are active, the motor shaft will be free or the red LED blinks. Reset the drive by repowering it
+to make it function properly after removing above problems.
+                                                             10
+                                                                                             Digital Stepper Driver DM320T
+12. Troubleshooting
+In the event that your drive doesn’t operate properly, the first step is to identify whether the problem is electrical or
+mechanical in nature. The next step is to isolate the system component that is causing the problem. As part of this
+process you may have to disconnect the individual components that make up your system and verify that they
+operate independently. It is important to document each step in the troubleshooting process. You may need this
+documentation to refer back to at a later date, and these details will greatly assist our Technical Support staff in
+determining the problem should you need assistance.
+Many of the problems that affect motion control systems can be traced to electrical noise, controller software errors,
+or mistake in wiring.
+Problem Symptoms and Possible Causes
+                    Symptoms                                                 Possible Problems
+                                                    No power
+                                                    Microstep resolution setting is wrong
+              Motor is not rotating                 DIP switch current setting is wrong
+                                                    Fault condition exists
+                                                    The drive is disabled
+      Motor rotates in the wrong direction          Motor phases may be connected in reverse
+                                                    DIP switch current setting is wrong
+                 The drive in fault
+                                                    Something wrong with motor coil
+                                                    Control signal is too weak
+                                                    Control signal is interfered
+              Erratic motor motion                  Wrong motor connection
+                                                    Something wrong with motor coil
+                                                    Current setting is too small, losing steps
+                                                    Current setting is too small
+                                                    Motor is undersized for the application
+         Motor stalls during acceleration
+                                                    Acceleration is set too high
+                                                    Power supply voltage too low
+                                                    Inadequate heat sinking / cooling
+        Excessive motor and drive heating           Automatic current reduction function not being utilized
+                                                    Current is set too high
+                                                          11
