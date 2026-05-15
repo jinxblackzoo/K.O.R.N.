@@ -188,6 +188,84 @@ static int lastNowSec = -1;           // Sekunden des Tages der letzten Prüfung
 // firstSchedCheck entfernt – Catch-up nur via pending
 
 // =========================================================================
+// Event-Log: Ringpuffer im RAM, abrufbar über /log (Web).
+// Erlaubt Debugging fehlender Auslösungen ohne dauernden Serial-Monitor.
+// =========================================================================
+struct LogEntry {
+  uint32_t ms;       // millis() zum Zeitpunkt des Eintrags
+  int32_t totalSec;  // Sekunden seit Mitternacht (NTP) oder -1 falls nicht synced
+  uint8_t day;       // gNtpDay zum Zeitpunkt
+  char msg[56];      // Textnachricht
+};
+#define LOG_BUF_SIZE 24
+static LogEntry gLogBuf[LOG_BUF_SIZE];
+static uint8_t gLogHead = 0;
+static uint8_t gLogCount = 0;
+
+// Forward-Declaration für ntpGetTime (definiert weiter unten)
+static void ntpGetTime(int &h, int &m, int &s);
+
+void logEvent(const char* msg) {
+  LogEntry &e = gLogBuf[gLogHead];
+  e.ms = millis();
+  if (gNtpSynced) {
+    int h, m, s; ntpGetTime(h, m, s);
+    e.totalSec = (h >= 0) ? (h * 3600 + m * 60 + s) : -1;
+    e.day = gNtpDay;
+  } else {
+    e.totalSec = -1;
+    e.day = 0;
+  }
+  size_t n = strlen(msg);
+  if (n >= sizeof(e.msg)) n = sizeof(e.msg) - 1;
+  memcpy(e.msg, msg, n);
+  e.msg[n] = '\0';
+  gLogHead = (gLogHead + 1) % LOG_BUF_SIZE;
+  if (gLogCount < LOG_BUF_SIZE) gLogCount++;
+}
+
+// Rendert den Log als einfache HTML-Seite (wird aus homepage.ino aufgerufen).
+void logRenderHTML(WiFiClient &client) {
+  client.print(F("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"));
+  client.print(F("<!DOCTYPE html><html lang=\"de\"><head><meta charset=\"utf-8\">"));
+  client.print(F("<title>KORN Log</title>"));
+  client.print(F("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"));
+  client.print(F("<meta http-equiv=\"refresh\" content=\"15\">"));
+  client.print(F("<style>body{font-family:monospace;background:#111;color:#eee;padding:8px;font-size:12px}"));
+  client.print(F("table{width:100%;border-collapse:collapse}td{padding:2px 4px;border-bottom:1px solid #333;vertical-align:top}"));
+  client.print(F(".t{color:#9cf;white-space:nowrap}.d{color:#888;white-space:nowrap}a{color:#9cf}</style>"));
+  client.print(F("</head><body><h2>KORN Event-Log</h2><p><a href=\"/\">Zurück</a> (Auto-Refresh 15s)</p>"));
+  client.print(F("<table>"));
+  uint8_t start = (gLogCount < LOG_BUF_SIZE) ? 0 : gLogHead;
+  for (uint8_t i = 0; i < gLogCount; i++) {
+    uint8_t idx = (start + i) % LOG_BUF_SIZE;
+    LogEntry &e = gLogBuf[idx];
+    client.print(F("<tr><td class=\"t\">"));
+    if (e.totalSec >= 0) {
+      int hh = e.totalSec / 3600;
+      int mm = (e.totalSec % 3600) / 60;
+      int ss = e.totalSec % 60;
+      char tb[12];
+      snprintf(tb, sizeof(tb), "%02d:%02d:%02d", hh, mm, ss);
+      client.print(tb);
+      client.print(F(" d="));
+      client.print((unsigned)e.day);
+    } else {
+      client.print(F("--:--:--"));
+    }
+    client.print(F("</td><td class=\"d\">"));
+    unsigned long upS = e.ms / 1000UL;
+    char ub[20];
+    snprintf(ub, sizeof(ub), "up%lu", upS);
+    client.print(ub);
+    client.print(F("</td><td>"));
+    client.print(e.msg);
+    client.print(F("</td></tr>"));
+  }
+  client.print(F("</table></body></html>"));
+}
+
+// =========================================================================
 // Konfiguration (Zeiten, Aktiv-Flag, Steps) – Ziel: DS1302-RAM (Persistenz)
 // =========================================================================
 // Web-Helfer: von homepage.ino aufrufen, um asynchrones Feed zu markieren
@@ -350,6 +428,11 @@ static bool ntpSync() {
       Serial.print(gNtpHour); Serial.print(':');
       if (gNtpMin < 10) Serial.print('0'); Serial.print(gNtpMin); Serial.print(':');
       if (gNtpSec < 10) Serial.print('0'); Serial.println(gNtpSec);
+      {
+        char m[56];
+        snprintf(m, sizeof(m), "NTP sync ok %02d:%02d:%02d day=%u", gNtpHour, gNtpMin, gNtpSec, (unsigned)gNtpDay);
+        logEvent(m);
+      }
       return true;
     }
     delay(10);
@@ -472,6 +555,25 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
   if (h2 > 23) h2 = 23; if (m2 > 59) m2 = 59;
   if (steps < 1) steps = 1;
 
+  // Tagesmarker zurücksetzen, sobald der Nutzer eine Schedule-Änderung speichert.
+  // Damit blockieren alte "fedToday*"-Marker (z.B. von Vor-Tests) den neuen Termin nicht mehr.
+  // Re-Trigger heute-bereits-vergangener Zeiten wird durch die Crossing-Detection
+  // im Scheduler verhindert (nur (lastNowSec, nowSec] zählt).
+  bool changed1 = (gCfg.h1 != h1) || (gCfg.m1 != m1);
+  bool changed2 = (gCfg.h2 != h2) || (gCfg.m2 != m2);
+  bool changedA2 = ((gCfg.active2 != 0) != active2);
+  bool scheduleChanged = changed1 || changed2 || changedA2;
+  if (scheduleChanged) {
+    fedToday1 = false;
+    fedToday2 = false;
+    pendingSched1 = false;
+    pendingSched2 = false;
+    char m[56];
+    snprintf(m, sizeof(m), "CFG saved t1=%02u:%02u t2=%02u:%02u a2=%d reset",
+             (unsigned)h1, (unsigned)m1, (unsigned)h2, (unsigned)m2, (int)active2);
+    logEvent(m);
+  }
+
   gCfg.h1 = h1; gCfg.m1 = m1;
   gCfg.h2 = h2; gCfg.m2 = m2;
   gCfg.active2 = active2 ? 1 : 0;
@@ -480,6 +582,7 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
   gCfgValid = true;
   cfgApplyToRuntime();
   cfgSaveToRtcRam();
+  if (scheduleChanged) feedStateSave();
 }
 
 // Hilfsfunktion twoDigits() entfernt, um String-Allokationen zu vermeiden
@@ -675,6 +778,18 @@ static void printStatusPeriodic() {
            "SSID:%s IP:%s | TIME:%s | Last:%s(%s) | Next1:%s(T-%s) Next2:%s [%s] | Steps:%d | NTP:%s CFG:%s | Up:%s",
            wifiIsSetupMode() ? "KORN-Setup" : wifiGetSSID(), ipBuf, timeBuf, lastBuf, lastStepsBuf, n1Buf, c1Buf, n2Buf, n2Bracket, (int)gCfg.steps, gNtpSynced ? "OK" : "--", cfgStat, upBuf);
   Serial.println(line);
+
+  // Diagnose-Zeile: Schedule-Zustand (hilft beim Debugging fehlender Auslösungen)
+  char diag[160];
+  snprintf(diag, sizeof(diag),
+           "DIAG cfg=%02u:%02u/%02u:%02u a2=%d | fed1=%d fed2=%d pend1=%d pend2=%d | knownDay=%u ntpDay=%u",
+           (unsigned)gCfg.h1, (unsigned)gCfg.m1,
+           (unsigned)gCfg.h2, (unsigned)gCfg.m2,
+           (int)(gCfg.active2 != 0),
+           (int)fedToday1, (int)fedToday2,
+           (int)pendingSched1, (int)pendingSched2,
+           (unsigned)lastKnownDay, (unsigned)gNtpDay);
+  Serial.println(diag);
 }
 
 // NTP-Sync versuchen (nur wenn WLAN verbunden und nicht im Setup-Modus)
@@ -738,10 +853,13 @@ void setup() {
   // Wenn NTP synchronisiert UND der gespeicherte ntpDay nicht mehr passt → neuer Tag, Marker zurücksetzen
   if (gNtpSynced && lastKnownDay != gNtpDay) {
     Serial.println(F("FeedState: Tageswechsel erkannt – fedToday1/2 zurückgesetzt."));
+    logEvent("BOOT day-change reset fed1/fed2");
     fedToday1 = false;
     fedToday2 = false;
     lastKnownDay = gNtpDay;
     feedStateSave();
+  } else {
+    logEvent("BOOT");
   }
 }
 
@@ -754,7 +872,9 @@ void watchdogRefresh() {
   #endif
 }
 
-void loop() {
+void loop(){
+unsigned long now = millis();
+
   watchdogRefresh();
 
   // DNS-Anfragen bearbeiten (Captive Portal im Einrichtungs-AP-Modus)
@@ -782,7 +902,6 @@ void loop() {
 
   // Periodische Minimal-Ausgabe
   const unsigned long intervalMs = (unsigned long)STATUS_INTERVAL_S * 1000UL;
-  unsigned long now = millis();
   if (now - lastStatusMs >= intervalMs) {
     printStatusPeriodic();
     lastStatusMs = now;
@@ -871,6 +990,21 @@ void loop() {
     int nowSec = nowH_t * 3600 + nowM_t * 60 + nowS_t;
     if (lastNowSec < 0) lastNowSec = nowSec; // Initialisierung beim ersten Durchlauf
 
+    // NTP-Drift-Korrektur: Wenn nowSec gegenüber lastNowSec um wenige Sekunden
+    // RÜCKWÄRTS gesprungen ist, war das ein NTP-Sync, der den Crystal-Drift des
+    // UNO R4 ausgeglichen hat. Ohne Behandlung würde die Crossing-Logik in den
+    // Wrap-Branch fallen (siehe Lambda unten) und ALLE Termine zwischen nowS und
+    // lastS fälschlich als "überschritten" markieren – inkl. echter Termine
+    // später am Tag (z.B. 09:00 oder 17:58).
+    // Echter Mitternacht-Wrap: lastS nahe 86400, nowS nahe 0 → Differenz > 12h.
+    // NTP-Drift: typisch 1–3 Sekunden.
+    if (lastNowSec > nowSec && (lastNowSec - nowSec) < 12 * 3600) {
+      // Kein Mitternacht-Wrap – also Drift-Korrektur. lastNowSec auf nowSec
+      // ziehen, damit der Wrap-Branch nicht greift.
+      lastNowSec = nowSec;
+      logEvent("NTP drift: skip crossing");
+    }
+
     // Tageswechsel erkennen → Marker zurücksetzen + persistieren
     if (lastKnownDay != gNtpDay) {
       fedToday1 = false;
@@ -878,6 +1012,7 @@ void loop() {
       pendingSched1 = false;
       pendingSched2 = false;
       lastKnownDay = gNtpDay;
+      logEvent("DAY rollover reset fed1/fed2");
       feedStateSave();  // Tageswechsel persistieren
       // Hinweis: lastNowSec NICHT zurücksetzen – Crossing-Logik ist wrap-aware
     }
@@ -901,6 +1036,37 @@ void loop() {
     bool crossed2 = crossed(lastNowSec, nowSec, t2Sec);
     bool armed = (millis() - bootMs) >= ARMING_WINDOW_MS;
 
+    // Diagnose: protokolliere jedes Crossing samt der für die Auslösung
+    // entscheidenden Zustandsvariablen. So lässt sich auch ohne Live-Serial
+    // im Nachhinein erkennen, warum eine geplante Fütterung übersprungen wurde.
+    if (crossed1) {
+      Serial.print(F("CROSS1 @"));
+      Serial.print(nowH_t); Serial.print(':');
+      if (nowM_t < 10) Serial.print('0'); Serial.print(nowM_t); Serial.print(':');
+      if (nowS_t < 10) Serial.print('0'); Serial.print(nowS_t);
+      Serial.print(F(" fed1=")); Serial.print((int)fedToday1);
+      Serial.print(F(" feedInProg=")); Serial.print((int)feedingInProgress);
+      Serial.print(F(" armed=")); Serial.println((int)armed);
+      char m[56];
+      snprintf(m, sizeof(m), "CROSS1 fed1=%d feedIP=%d armed=%d",
+               (int)fedToday1, (int)feedingInProgress, (int)armed);
+      logEvent(m);
+    }
+    if (crossed2) {
+      Serial.print(F("CROSS2 @"));
+      Serial.print(nowH_t); Serial.print(':');
+      if (nowM_t < 10) Serial.print('0'); Serial.print(nowM_t); Serial.print(':');
+      if (nowS_t < 10) Serial.print('0'); Serial.print(nowS_t);
+      Serial.print(F(" fed2=")); Serial.print((int)fedToday2);
+      Serial.print(F(" a2=")); Serial.print((int)(gCfg.active2 != 0));
+      Serial.print(F(" feedInProg=")); Serial.print((int)feedingInProgress);
+      Serial.print(F(" armed=")); Serial.println((int)armed);
+      char m[56];
+      snprintf(m, sizeof(m), "CROSS2 fed2=%d a2=%d feedIP=%d armed=%d",
+               (int)fedToday2, (int)(gCfg.active2 != 0), (int)feedingInProgress, (int)armed);
+      logEvent(m);
+    }
+
     if (!feedingInProgress && armed) {
       // Mindestabstand zur letzten Fütterung (sekundengenau, wrap-aware)
       int deltaLastSec = 999999; // groß = "kein Limit"
@@ -921,6 +1087,7 @@ void loop() {
           Serial.print(nowH_t); Serial.print(':');
           if (nowM_t < 10) Serial.print('0'); Serial.print(nowM_t); Serial.print(':');
           if (nowS_t < 10) Serial.print('0'); Serial.println(nowS_t);
+          logEvent("TRIG SCHED1");
           nextFeedSrc = SRC_SCHED1;
           requestImmediateFeed();
           fedToday1 = true;
@@ -954,6 +1121,7 @@ void loop() {
             if (curH < 10) Serial.print('0'); Serial.print(curH); Serial.print(':');
             if (curM < 10) Serial.print('0'); Serial.print(curM); Serial.print(':');
             if (curS < 10) Serial.print('0'); Serial.println(curS);
+            logEvent("TRIG SCHED2");
             nextFeedSrc = SRC_SCHED2;
             requestImmediateFeed();
             fedToday2 = true;
@@ -978,6 +1146,7 @@ void loop() {
       if (!didTrigger) {
         if (pendingSched1 && !fedToday1 && deltaLastSec >= (int)MIN_GAP_MIN * 60) {
           Serial.println(F("TRIG:SCHED1(pending)"));
+          logEvent("TRIG SCHED1 pending");
           nextFeedSrc = SRC_SCHED1;
           requestImmediateFeed();
           fedToday1 = true;
@@ -995,6 +1164,7 @@ void loop() {
           }
           if (dSec >= (int)MIN_GAP_MIN * 60) {
             Serial.println(F("TRIG:SCHED2(pending)"));
+            logEvent("TRIG SCHED2 pending");
             nextFeedSrc = SRC_SCHED2;
             requestImmediateFeed();
             fedToday2 = true;
@@ -1008,6 +1178,7 @@ void loop() {
         int secsSinceCrossing = nowSec - t1Sec; if (secsSinceCrossing < 0) secsSinceCrossing += 24 * 3600;
         if (secsSinceCrossing > 0 && secsSinceCrossing <= 10) {
           Serial.println(F("TRIG:SCHED1(late)"));
+          logEvent("TRIG SCHED1 late");
           nextFeedSrc = SRC_SCHED1;
           requestImmediateFeed();
           fedToday1 = true;
@@ -1025,6 +1196,7 @@ void loop() {
           int secsSinceCrossing = nowSec - t2Sec; if (secsSinceCrossing < 0) secsSinceCrossing += 24 * 3600;
           if (secsSinceCrossing > 0 && secsSinceCrossing <= 10) {
             Serial.println(F("TRIG:SCHED2(late)"));
+            logEvent("TRIG SCHED2 late");
             nextFeedSrc = SRC_SCHED2;
             requestImmediateFeed();
             fedToday2 = true;

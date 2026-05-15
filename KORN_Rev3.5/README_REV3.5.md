@@ -599,4 +599,36 @@ Hinweise:
 
 ---
 
+## 🐛 Bug-Historie / Bekannte Probleme
+
+### Behoben: NTP-Drift verursacht Geister-Auslösung beider Termine kurz nach Mitternacht (Mai 2026)
+
+**Symptom:** Termine 1 und 2 lösten gelegentlich nicht zur konfigurierten Uhrzeit aus. Stattdessen wurden beide Termine in der Nacht (typisch zwischen 00:56 und 01:56) hintereinander unbeabsichtigt ausgelöst, und die echten Auslösezeiten (z. B. 09:00 und 17:58) am selben Tag übersprungen.
+
+**Ursache:** Der Quarz des UNO R4 läuft minimal schneller als die echte Zeit (Crystal-Drift). Innerhalb einer Stunde überholt die `millis()`-basierte Uhrzeitberechnung den realen NTP-Zeitstrom um ~1 s. Beim stündlichen NTP-Sync wird die Zeit um genau diese 1 s **rückwärts** korrigiert.
+
+Die Crossing-Erkennung im Scheduler benutzte einen Wrap-Around-Branch (für Mitternacht), der **immer** griff, wenn die letzte abgespeicherte Sekunde größer war als die aktuelle:
+
+```cpp
+auto crossed = [](int lastS, int nowS, int tS) {
+  if (lastS <= nowS) {
+    return (tS > lastS) && (tS <= nowS);
+  } else {
+    return (tS > lastS) || (tS <= nowS);  // Wrap-Branch
+  }
+};
+```
+
+Bei einer Drift-Korrektur von z. B. `lastS=6976` auf `nowS=6975` lief der Wrap-Branch los und meldete **alle** Zielzeiten zwischen 6975 und 6976 + Tagesgrenze als überschritten – inklusive 09:00, 17:58, etc.
+
+Folge: Beide Termine wurden als pending markiert und sofort gefüttert, dann am echten Termin durch `fedToday=1` blockiert.
+
+**Heisenbug-Charakter:** Mit angeschlossenem Serial-Monitor war das Verhalten nicht reproduzierbar, weil zusätzliche `Serial.print`-Aufrufe das Loop-Timing minimal verschoben und damit auch den Drift gegen die NTP-Sync-Sekunde.
+
+**Fix (`Script_KORN_REV3.5/main/main.ino`):** Vor der Crossing-Prüfung wird ein Rückwärtssprung von weniger als 12 h als Drift-Korrektur erkannt und `lastNowSec` auf `nowSec` gezogen. Echte Mitternacht-Wraps (Differenz > 12 h) bleiben unberührt.
+
+**Diagnose:** Über die neue Webseite `/log` (Button auf der Startseite) lassen sich die letzten 24 Scheduler-Ereignisse einsehen, ohne Serial-Monitor: `BOOT`, `DAY rollover`, `CFG saved`, `CROSS1`/`CROSS2`, `TRIG SCHED1`/`TRIG SCHED2`, `NTP sync ok`, `NTP drift: skip crossing`.
+
+---
+
 **Status:** In Entwicklung | **Version:** Rev3.5 (2026) | **Lizenz:** Open-Source CAD-Hardware/Software

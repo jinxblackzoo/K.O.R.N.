@@ -5,6 +5,12 @@ K.O.R.N. ist ein robuster, Open-Source/Hardware, wasserdichter, mit einfachen Mi
 
 ## 🎯 Projektübersicht
 
+## Rev.4 Ideen
+	- Nur den NEMA17 im Gehäuse lassen. Controller und Stromversorgung in ein besser zugängliches Gehäuse 		extern mit Hutschienenmontage
+	- AC/DC Wandler auf Hutschiene
+	- Umstieg von Arduino auf Raspi Pico 2 WH?
+
+
 Aufgrund der enttäuschenden Erfahrung mit gekauften Fütterungsautomaten welche trotz der teils hohen Preise entweder nach drei Wochen defekt waren, oder ganze Mäusefamilien durchfütterten, musste eine Eigenkonstruktion her. Die Entscheidungsgrundlage für das gewählte System mit einer Förderschnecke in einem Rohr, basiert auf einer Recherche im Dubbel Ausgabe von 2001.
 
 Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter) aus einem Silo (KG-Rohr) in einen Auswurfschacht befördert. Das Gehäuse besteht aus überall erhältlichen, robusten und günstigen HT-, bzw KG-Rohren.

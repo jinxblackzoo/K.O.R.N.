@@ -36,6 +36,9 @@ int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
 // Hilfsfunktion formatHM() aus main.ino
 void formatHM(char* buf, size_t len, int h, int m);
+// Event-Log aus main.ino
+void logRenderHTML(WiFiClient &client);
+void logEvent(const char* msg);
 
 // RAM-schonendes Streaming der Header/Footer direkt aus Flash
 static void sendHeader(WiFiClient &client) {
@@ -437,6 +440,10 @@ static void handleRoot(WiFiClient &client) {
     client.print(F("<button type=\"button\" disabled style=\"background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.95;cursor:default\">NTP nicht synchronisiert</button>"));
   }
   client.print(F("</div>"));
+  // Diagnose-Log Link
+  client.print(F("<div style=\"margin-top:12px\"><a href=\"/log"));
+  client.print(authQuerySuffix());
+  client.print(F("\"><button type=\"button\" style=\"background:#455a64;color:#fff;border:none;padding:8px 12px;border-radius:4px;font-size:14px;cursor:pointer\">📋 Event-Log anzeigen</button></a></div>"));
   // Factory Reset Button (unter NTP-Status)
   client.print(F("<div style=\"margin-top:12px\">"));
   client.print(F("<form method=\"POST\" action=\"/reset\" onsubmit=\"return confirm('Wirklich alle Einstellungen löschen? WLAN-Zugangsdaten und Konfiguration werden zurückgesetzt.');\">"));
@@ -731,6 +738,8 @@ void webHandleClient() {
     client.print(F("Location: /"));
     client.print(authQuerySuffix());
     client.print(F("\r\nConnection: close\r\n\r\n"));
+  } else if (path == "/log" && !isPost) {
+    logRenderHTML(client);
   } else if (path == "/status" && !isPost) {
     handleStatus(client);
   } else if (path == "/save" && isPost) {
