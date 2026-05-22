@@ -110,6 +110,8 @@ Relais Schaltkontakte:
   - Letzte Fütterung wird live aktualisiert (Zeit + Quelle: Manuell/Web/Timer)
   - Warn-Button „Blockade lösen (Rechtslauf)“ mit Laufzeit-Eingabe (Standard 2 s; Begrenzung 1–60 s). Nur kurzfristig verwenden!
   - NTP-Status-Anzeige: Grün = synchronisiert, Rot = kein NTP-Sync
+  - **Datum + Uhrzeit**: Vollständige Anzeige im Format `YYYY-MM-DD HH:MM:SS` (Web-UI + Serial Monitor)
+  - **Diagnose-Log (`/log`)**: Button "📋 Event-Log anzeigen" auf der Startseite – zeigt die letzten 24 Scheduler-Ereignisse (BOOT, NTP sync, CFG saved, CROSS1/CROSS2, TRIG SCHED1/SCHED2, DAY rollover, NTP drift) mit vollem Zeitstempel. Ersetzt den seriellen Monitor für Fehlersuche unterwegs.
   - Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header
   - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
   - Footer mit GitHub-Link und Build-Datum
@@ -224,12 +226,12 @@ Hauptsächlich für Entwickler und Fehlersuche. Er zeigt:
 
 **Beispiel einer Statuszeile:**
 ```
-SSID:MeinHeimnetz IP:192.168.1.42 | TIME:18:48 | Last:17:10(5000) | Next1:19:00(T-00:12) Next2:-- [off] | Steps:5000 | NTP:OK CFG:EEPROM | Up:00:32
+SSID:MeinHeimnetz IP:192.168.1.42 | TIME:2026-05-22 18:48:15 | Last:17:10(5000) | Next1:19:00(T-00:12) Next2:-- [off] | Steps:5000 | NTP:OK CFG:EEPROM | Up:00:32
 ```
 
 **Bedeutung:**
 - Verbunden mit WLAN "MeinHeimnetz", IP 192.168.1.42
-- Aktuelle Zeit: 18:48 Uhr (per NTP)
+- Aktuelles Datum + Zeit: 2026-05-22 18:48:15 (per NTP, inkl. Sommer-/Winterzeit)
 - Letzte Fütterung: um 17:10 Uhr
 - Nächste Fütterung: um 19:00 Uhr (in 12 Minuten)
 - NTP: synchronisiert

@@ -1,4 +1,6 @@
 KORN_Rev3.5/LOG_korn*.txt
+LOG_korn*.txt
+**/LOG_korn*.txt
 
 # Interne Planungsdokumente (nicht öffentlich)
 Projektplan*.md

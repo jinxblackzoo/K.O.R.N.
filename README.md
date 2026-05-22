@@ -44,6 +44,11 @@ Statt eines eigenen Access Points verbindet sich KORN nun mit einem vorhandenen 
 - **Robuster WLAN-Reconnect**: Bei vorhandenen Credentials kein automatischer Setup-AP-Modus
 - **HTTP-Timeouts optimiert**: 500ms statt 1500ms → weniger Loop-Blockaden
 - **XSS-Schutz**: HTML-Escaping & URL-Encoding für Admin-Passwort
+- **NTP-Drift-Schutz**: Erkennt kleine Rückwärtssprünge bei NTP-Resync und verhindert dadurch ausgelöste Geister-Fütterungen (Mai 2026)
+
+**Diagnose & Monitoring:**
+- **Volles Datum + Uhrzeit** (`YYYY-MM-DD HH:MM:SS`) auf Web-UI und seriellem Monitor
+- **Event-Log auf der Webseite** (`/log`): RAM-Ringpuffer mit den letzten 24 Scheduler-Ereignissen (Boot, NTP-Sync, Crossings, Trigger, Tageswechsel, Drift) – Fehlersuche ohne angeschlossenen Laptop
 
 **Ablauf:** Beim ersten Start oder bei fehlendem WLAN öffnet der Arduino einen temporären Einrichtungs-AP. Nach Speichern der Zugangsdaten verbindet sich KORN automatisch mit dem Heimnetz.
 
