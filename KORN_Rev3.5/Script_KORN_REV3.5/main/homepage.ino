@@ -21,6 +21,8 @@ void requestImmediateFeed();
 void requestFeedFromWebAsync();
 // NTP-Status aus main.ino
 bool ntpIsSynced();
+// Aktuelles Datum + Uhrzeit (driftet mit millis weiter, inkl. Mitternachts-Wrap)
+void ntpGetDateTime(int &year, int &month, int &mday, int &h, int &m, int &s);
 // WLAN-Konfig speichern aus wifi_client.ino
 void wifiCredSave(const char* ssid, const char* pass, const char* admin_pass);
 bool wifiIsSetupMode();
@@ -281,8 +283,20 @@ static void handleRoot(WiFiClient &client) {
   bool ntpOk=false, a2=false, delayWarning=false; int nowH=-1,nowM=-1,nowS=-1,lastH=-1,lastM=-1,n1H=-1,n1M=-1,n2H=-1,n2M=-1,c1H=-1,c1M=-1,c2H=-1,c2M=-1,steps=0,actualH=-1,actualM=-1,actualS=-1; uint8_t lastSrc=0;
   getStatusSnapshot(ntpOk, nowH, nowM, nowS, lastH, lastM, n1H, n1M, n2H, n2M, c1H, c1M, c2H, c2M, a2, steps, lastSrc, delayWarning, actualH, actualM, actualS);
   char buf[16];
-  // Zeile: Zeit jetzt (self-updating via JS)
+  // Aktuelles Datum für die Anzeige holen (driftet mit millis korrekt weiter)
+  int dY=0, dMo=0, dD=0, dH=-1, dM=-1, dS=-1;
+  if (ntpOk) ntpGetDateTime(dY, dMo, dD, dH, dM, dS);
+  // Zeile: Datum + Zeit jetzt (Zeit self-updating via JS, Datum statisch bis Reload)
   client.print(F("<p><b>KORN-Zeit:</b> "));
+  if (ntpOk && dY > 0) {
+    char dbuf[12];
+    snprintf(dbuf, sizeof(dbuf), "%04d-%02d-%02d ", dY, dMo, dD);
+    client.print(F("<span id=\"clockdate\">"));
+    client.print(dbuf);
+    client.print(F("</span>"));
+  } else {
+    client.print(F("<span id=\"clockdate\">----------- </span>"));
+  }
   client.print(F("<span id=\"clock\""));
   client.print(F(" data-h=\"")); client.print(ntpOk ? nowH : -1); client.print(F("\""));
   client.print(F(" data-m=\"")); client.print(ntpOk ? nowM : -1); client.print(F("\""));

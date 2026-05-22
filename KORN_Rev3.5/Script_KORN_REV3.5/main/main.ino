@@ -89,6 +89,10 @@ static unsigned long gNtpLastSyncMs = 0;
 static int gNtpHour = -1, gNtpMin = -1, gNtpSec = -1;
 static unsigned long gNtpBaseMs = 0;  // millis() zum Zeitpunkt des letzten Syncs
 static uint8_t gNtpDay = 0;           // Tag des letzten Syncs (für Mitternachts-Reset)
+static uint32_t gNtpEpochAtSync = 0;  // localEpoch (Sek seit 1970, mit TZ+DST) bei letztem Sync
+static int gNtpYear = 0;              // Jahr beim letzten Sync (z.B. 2026)
+static int gNtpMonth = 0;             // Monat 1-12
+static int gNtpMDay = 0;              // Tag im Monat 1-31
 
 // Quelle der letzten/kommenden Fütterung (für Status/Anzeige)
 const uint8_t SRC_NONE = 0;
@@ -192,10 +196,9 @@ static int lastNowSec = -1;           // Sekunden des Tages der letzten Prüfung
 // Erlaubt Debugging fehlender Auslösungen ohne dauernden Serial-Monitor.
 // =========================================================================
 struct LogEntry {
-  uint32_t ms;       // millis() zum Zeitpunkt des Eintrags
-  int32_t totalSec;  // Sekunden seit Mitternacht (NTP) oder -1 falls nicht synced
-  uint8_t day;       // gNtpDay zum Zeitpunkt
-  char msg[56];      // Textnachricht
+  uint32_t ms;          // millis() zum Zeitpunkt des Eintrags
+  int32_t  localEpoch;  // localEpoch (Sek seit 1970 lokal) oder -1 falls kein NTP
+  char     msg[56];     // Textnachricht
 };
 #define LOG_BUF_SIZE 24
 static LogEntry gLogBuf[LOG_BUF_SIZE];
@@ -204,17 +207,17 @@ static uint8_t gLogCount = 0;
 
 // Forward-Declaration für ntpGetTime (definiert weiter unten)
 static void ntpGetTime(int &h, int &m, int &s);
+void ntpGetDateTime(int &year, int &month, int &mday, int &h, int &m, int &s);
+static void epochToDateTime(uint32_t le, int &year, int &month, int &mday, int &h, int &m, int &s);
 
 void logEvent(const char* msg) {
   LogEntry &e = gLogBuf[gLogHead];
   e.ms = millis();
   if (gNtpSynced) {
-    int h, m, s; ntpGetTime(h, m, s);
-    e.totalSec = (h >= 0) ? (h * 3600 + m * 60 + s) : -1;
-    e.day = gNtpDay;
+    uint32_t elapsed = (millis() - gNtpBaseMs) / 1000UL;
+    e.localEpoch = (int32_t)(gNtpEpochAtSync + elapsed);
   } else {
-    e.totalSec = -1;
-    e.day = 0;
+    e.localEpoch = -1;
   }
   size_t n = strlen(msg);
   if (n >= sizeof(e.msg)) n = sizeof(e.msg) - 1;
@@ -241,17 +244,15 @@ void logRenderHTML(WiFiClient &client) {
     uint8_t idx = (start + i) % LOG_BUF_SIZE;
     LogEntry &e = gLogBuf[idx];
     client.print(F("<tr><td class=\"t\">"));
-    if (e.totalSec >= 0) {
-      int hh = e.totalSec / 3600;
-      int mm = (e.totalSec % 3600) / 60;
-      int ss = e.totalSec % 60;
-      char tb[12];
-      snprintf(tb, sizeof(tb), "%02d:%02d:%02d", hh, mm, ss);
+    if (e.localEpoch >= 0) {
+      int yy, mo, md, hh, mm, ss;
+      epochToDateTime((uint32_t)e.localEpoch, yy, mo, md, hh, mm, ss);
+      char tb[24];
+      snprintf(tb, sizeof(tb), "%04d-%02d-%02d %02d:%02d:%02d",
+               yy, mo, md, hh, mm, ss);
       client.print(tb);
-      client.print(F(" d="));
-      client.print((unsigned)e.day);
     } else {
-      client.print(F("--:--:--"));
+      client.print(F("---------- --:--:--"));
     }
     client.print(F("</td><td class=\"d\">"));
     unsigned long upS = e.ms / 1000UL;
@@ -413,10 +414,16 @@ static bool ntpSync() {
       // Zeitzone + Sommerzeit (einfache Heuristik: März–Oktober = Sommerzeit)
       uint32_t localEpoch = epoch + (uint32_t)(NTP_TIMEZONE_H + ntpIsDST(epoch)) * 3600UL;
 
-      // Uhrzeit extrahieren
-      gNtpHour = (localEpoch % 86400UL) / 3600;
-      gNtpMin  = (localEpoch % 3600UL)  / 60;
-      gNtpSec  = localEpoch % 60;
+      // Datum + Uhrzeit aus localEpoch ableiten
+      int yy, mo, md, hh, mm, ss;
+      epochToDateTime(localEpoch, yy, mo, md, hh, mm, ss);
+      gNtpHour = hh;
+      gNtpMin  = mm;
+      gNtpSec  = ss;
+      gNtpYear  = yy;
+      gNtpMonth = mo;
+      gNtpMDay  = md;
+      gNtpEpochAtSync = localEpoch;
       // Tages-ID für Tageswechsel-Erkennung. Modulo 256 (uint8_t-Range): nach 256 Tagen
       // Offline-Zeit kann es theoretisch zu einer Kollision kommen. Praktisch unkritisch,
       // da KORN bei längeren Stromausfällen ohnehin neu eingerichtet wird.
@@ -424,13 +431,15 @@ static bool ntpSync() {
       gNtpBaseMs = millis();
       gNtpSynced = true;
       ntpUDP.stop();
+      // Serial-Ausgabe: ISO-Format YYYY-MM-DD HH:MM:SS
+      char tbuf[32];
+      snprintf(tbuf, sizeof(tbuf), "%04d-%02d-%02d %02d:%02d:%02d",
+               gNtpYear, gNtpMonth, gNtpMDay, gNtpHour, gNtpMin, gNtpSec);
       Serial.print(F("NTP sync: "));
-      Serial.print(gNtpHour); Serial.print(':');
-      if (gNtpMin < 10) Serial.print('0'); Serial.print(gNtpMin); Serial.print(':');
-      if (gNtpSec < 10) Serial.print('0'); Serial.println(gNtpSec);
+      Serial.println(tbuf);
       {
         char m[56];
-        snprintf(m, sizeof(m), "NTP sync ok %02d:%02d:%02d day=%u", gNtpHour, gNtpMin, gNtpSec, (unsigned)gNtpDay);
+        snprintf(m, sizeof(m), "NTP sync ok %s", tbuf);
         logEvent(m);
       }
       return true;
@@ -466,6 +475,31 @@ static int ntpIsDST(uint32_t epoch) {
   return 0;
 }
 
+// Hilfsfunktion: localEpoch (Sek seit 1970, lokale Zeit inkl. TZ+DST) in Datum
+// und Uhrzeit zerlegen. Schaltjahr-bewusst.
+static void epochToDateTime(uint32_t le, int &year, int &month, int &mday,
+                            int &h, int &m, int &s) {
+  uint32_t days = le / 86400UL;
+  uint32_t secOfDay = le % 86400UL;
+  h = secOfDay / 3600;
+  m = (secOfDay % 3600) / 60;
+  s = secOfDay % 60;
+
+  int y = 1970;
+  while (true) {
+    uint32_t yLen = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+    if (days < yLen) break;
+    days -= yLen; y++;
+  }
+  year = y;
+  uint8_t mdays[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+  if (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) mdays[1] = 29;
+  int mo = 1;
+  for (int i = 0; i < 12 && days >= mdays[i]; i++) { days -= mdays[i]; mo++; }
+  month = mo;
+  mday  = (int)days + 1;
+}
+
 // Aktuelle Zeit berechnen (NTP-Basis + millis-Drift)
 static void ntpGetTime(int &h, int &m, int &s) {
   if (!gNtpSynced) { h = -1; m = -1; s = -1; return; }
@@ -475,6 +509,16 @@ static void ntpGetTime(int &h, int &m, int &s) {
   h = totalSec / 3600;
   m = (totalSec % 3600) / 60;
   s = totalSec % 60;
+}
+
+// Aktuelles Datum + Uhrzeit (NTP-Basis + millis-Drift), inkl. Mitternachts-Wrap
+// auf Datum (Tag/Monat/Jahr werden korrekt fortgezählt, auch ohne neuen Sync).
+void ntpGetDateTime(int &year, int &month, int &mday,
+                    int &h, int &m, int &s) {
+  if (!gNtpSynced) { year = 0; month = 0; mday = 0; h = -1; m = -1; s = -1; return; }
+  uint32_t elapsed = (millis() - gNtpBaseMs) / 1000UL;
+  uint32_t le = gNtpEpochAtSync + elapsed;
+  epochToDateTime(le, year, month, mday, h, m, s);
 }
 
 static void cfgApplyDefaults() {
@@ -590,11 +634,12 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 static const char* SETUP_AP_SSID_STR = "KORN-Setup";
 
 static void printStatusStartup() {
-  char timeBuf[6] = "--:--";
+  char timeBuf[24] = "----------- --:--:--";
   const char* ntpStat = gNtpSynced ? "OK" : "--";
   if (gNtpSynced) {
-    int h, m, s; ntpGetTime(h, m, s);
-    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", h, m);
+    int y, mo, d, h, m, s; ntpGetDateTime(y, mo, d, h, m, s);
+    snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+             y, mo, d, h, m, s);
   }
   const char* cfgStat = gCfgFromEeprom ? "EEPROM" : "DEF";
   // IP dynamisch ermitteln
@@ -731,7 +776,7 @@ static void printStatusPeriodic() {
   unsigned long secs = millis() / 1000UL;
   unsigned int upH = (secs / 3600UL) % 100U;
   unsigned int upM = (secs / 60UL) % 60U;
-  char timeBuf[6] = "--:--";
+  char timeBuf[24] = "----------- --:--:--";
   char lastBuf[6] = "--:--";
   char n1Buf[6] = "--:--";
   char n2Buf[6] = "--:--";
@@ -739,10 +784,11 @@ static void printStatusPeriodic() {
   char c1Buf[6] = "--:--";
   char c2Buf[6] = "--:--";
   char n2Bracket[8] = "--";
-  int ntpH = -1, ntpM = -1, ntpS = -1;
-  ntpGetTime(ntpH, ntpM, ntpS);
+  int ntpY = 0, ntpMo = 0, ntpD = 0, ntpH = -1, ntpM = -1, ntpS = -1;
+  ntpGetDateTime(ntpY, ntpMo, ntpD, ntpH, ntpM, ntpS);
   if (gNtpSynced && ntpH >= 0) {
-    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", ntpH, ntpM);
+    snprintf(timeBuf, sizeof(timeBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+             ntpY, ntpMo, ntpD, ntpH, ntpM, ntpS);
     formatHM(lastBuf, sizeof(lastBuf), lastFeedHour, lastFeedMinute);
     int n1H=-1,n1M=-1,n2H=-1,n2M=-1;
     computeNextTimes(ntpH, ntpM, n1H, n1M, n2H, n2M);
