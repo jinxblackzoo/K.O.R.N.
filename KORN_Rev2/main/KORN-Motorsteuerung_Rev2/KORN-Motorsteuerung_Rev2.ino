@@ -1,13 +1,13 @@
 /*
  * K.O.R.N. - Katastrophal Organisierter Nahrungsmittel Spender
- * Arduino-Code mit DS3231 Echtzeituhr für präzise Fütterungszeiten
+ * Arduino-Code mit DS3231 Echtzeituhr für eine präzise tägliche Fütterungszeit
  * 
  * VERDRAHTUNG DS3231:
  * DS3231 VCC  → Arduino 3.3V (oder 5V)
  * DS3231 GND  → Arduino GND
  * DS3231 SDA  → Arduino A4 (SDA)
  * DS3231 SCL  → Arduino A5 (SCL)
- * DS3231 SQW  → Arduino Pin 2 (Interrupt, optional)
+ * DS3231 SQW  → NICHT anschließen! 
  * 
  * VERDRAHTUNG MOTORTREIBER:
  * Treiber PUL+ → Arduino Pin 2 (Schrittimpulse)
@@ -25,7 +25,6 @@
  * 
  * HINWEIS: VIN liefert die rohe Eingangsspannung (7-12V je nach Netzteil).
  * Der Buzzer wird dadurch lauter, aber DS3231 MUSS an 3.3V/5V bleiben!
- * Pin 6 ist PWM-fähig und wird für tone() Funktion benötigt!
  */
 
 #include <AccelStepper.h>
@@ -39,14 +38,12 @@
 // KONFIGURATION - HIER ALLE PARAMETER EINSTELLEN
 // ============================================================================
 
-// FÜTTERUNGSZEITEN (24h Format)
-const int FUETTERUNG_STUNDE_1 = 07;   // Erste Fütterung um 07:00 Uhr
-const int FUETTERUNG_MINUTE_1 = 00;
-const int FUETTERUNG_STUNDE_2 = 14;   // Zweite Fütterung um 16:00 Uhr  
-const int FUETTERUNG_MINUTE_2 = 00;
+// FÜTTERUNGSZEIT (24h Format)
+const int FUETTERUNG_STUNDE_1 = 7;    // Fütterung. ACHTUNG: Keine führende Null (z.B. 09) - C++ wertet das als Oktalzahl!
+const int FUETTERUNG_MINUTE_1 = 1;
 
 // MOTORPARAMETER
-const int MOTOR_BESCHLEUNIGUNG = 100;  // Beschleunigung in Steps/s²
+const int MOTOR_BESCHLEUNIGUNG = 2000; // Beschleunigung in Steps/s²
 // Zeitbasierte Dosierung wie in Rev3: feste Schrittfrequenz + Dauer in Sekunden
 const int SCHRITTFREQUENZ = 1000;      // Steps pro Sekunde (fix)
 const int FUETTERUNG_DAUER_SEK = 5;    // Fütterungsdauer in Sekunden (1–60 s)
@@ -83,12 +80,8 @@ AccelStepper stepper(AccelStepper::DRIVER, PUL_PIN, DIR_PIN);
 RTC_DS3231 rtc;
 
 // Zustandsvariablen für Fütterungslogik
-bool fuetterung1_heute = false;  // Erste Fütterung heute bereits erfolgt?
-bool fuetterung2_heute = false;  // Zweite Fütterung heute bereits erfolgt?
-bool warnung1_heute = false;     // Warnung für erste Fütterung bereits erfolgt?
-bool warnung2_heute = false;     // Warnung für zweite Fütterung bereits erfolgt?
+bool fuetterung1_heute = false;  // Fütterung heute bereits erfolgt?
 int letzter_tag = -1;            // Letzter Tag für Tagesreset
-static int letzte_sekunde = -1;  // Letzte Sekunde für Zeitausgabe
 
 void setup() {
   // Pins früh konfigurieren, bevor Ausgänge erstmals genutzt werden
@@ -129,7 +122,15 @@ void setup() {
     Serial.println("FEHLER: DS3231 nicht gefunden!");
     Serial.println("Prüfe Verdrahtung:");
     Serial.println("VCC → 3.3V, GND → GND, SDA → A4, SCL → A5");
-    while (1) safeDelay(1000);  // Endlosschleife bei RTC-Fehler (Watchdog-freundlich)
+    // Dauerhafter Fehler-Alarm: 1x kurzer Beep alle 5 Sekunden,
+    // dazwischen erneuter Verbindungsversuch zur RTC
+    while (!rtc.begin()) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      safeDelay(200);
+      digitalWrite(BUZZER_PIN, LOW);
+      safeDelay(4800);
+    }
+    Serial.println("DS3231 wieder gefunden - fahre fort.");
   }
   
 #ifdef __AVR__
@@ -184,11 +185,9 @@ void setup() {
   fanfare_abspielen();
   
   Serial.println("-------------------------------------------");
-  Serial.println("Konfigurierte Fütterungszeiten:");
-  Serial.print("1. Fütterung: "); 
+  Serial.println("Konfigurierte Fütterungszeit:");
+  Serial.print("Fütterung: "); 
   formatiere_zeit(FUETTERUNG_STUNDE_1, FUETTERUNG_MINUTE_1);
-  Serial.print("2. Fütterung: ");
-  formatiere_zeit(FUETTERUNG_STUNDE_2, FUETTERUNG_MINUTE_2);
   Serial.println("-------------------------------------------");
   Serial.println("System bereit! Zeitausgabe alle 30 Sekunden.");
   Serial.println("===========================================");
@@ -201,18 +200,19 @@ void loop() {
 #endif
   DateTime jetzt = rtc.now();
   
-  // Zeitausgabe alle 30 Sekunden (bei Sekundenwechsel)
-  if (jetzt.second() != letzte_sekunde && jetzt.second() % 30 == 0) {
-    zeige_aktuelle_zeit();
-    letzte_sekunde = jetzt.second();
+  // Plausibilitätsprüfung: bei I2C-Störung können Müllwerte kommen
+  if (jetzt.year() < 2024 || jetzt.year() > 2099) {
+    Serial.println("⚠️ Ungültige RTC-Zeit gelesen - Durchlauf wird übersprungen!");
+    safeDelay(5000);
+    return;
   }
+  
+  // Zeitausgabe bei jedem Loop-Durchlauf (Loop läuft alle ZEIT_AUSGABE_INTERVALL Sekunden)
+  zeige_aktuelle_zeit();
   
   // Tagesreset um Mitternacht - Fütterungsflags zurücksetzen
   if (jetzt.day() != letzter_tag) {
     fuetterung1_heute = false;
-    fuetterung2_heute = false;
-    warnung1_heute = false;
-    warnung2_heute = false;
     letzter_tag = jetzt.day();
     
     // Neues Datum anzeigen
@@ -231,31 +231,20 @@ void loop() {
     Serial.println(" - Flags zurückgesetzt (Heartbeat)");
   }
   
-  // Erste Fütterungszeit prüfen - FÜTTERUNG
+  // Fütterungszeit prüfen - FÜTTERUNG
   if (!fuetterung1_heute && 
       jetzt.hour() == FUETTERUNG_STUNDE_1 && 
       jetzt.minute() == FUETTERUNG_MINUTE_1) {
     
-    Serial.println("🍽️ ERSTE FÜTTERUNG STARTET...");
+    Serial.println("🍽️ FÜTTERUNG STARTET...");
     fuetterungsvorgang();
     fuetterung1_heute = true;
-    Serial.println("✅ Erste Fütterung abgeschlossen!");
+    Serial.println("✅ Fütterung abgeschlossen!");
   }
   
-  // Zweite Fütterungszeit prüfen - FÜTTERUNG
-  if (!fuetterung2_heute && 
-      jetzt.hour() == FUETTERUNG_STUNDE_2 && 
-      jetzt.minute() == FUETTERUNG_MINUTE_2) {
-    
-    Serial.println("🍽️ ZWEITE FÜTTERUNG STARTET...");
-    fuetterungsvorgang();
-    fuetterung2_heute = true;
-    Serial.println("✅ Zweite Fütterung abgeschlossen!");
-  }
-  
-  // 30 Sekunden warten bevor nächste Zeitprüfung
+  // Warten bevor nächste Zeitprüfung
   // Verhindert mehrfache Fütterung in derselben Minute
-  safeDelay(30000);
+  safeDelay((unsigned long)ZEIT_AUSGABE_INTERVALL * 1000UL);
 }
 
 // ============================================================================
@@ -266,9 +255,11 @@ void fuetterungsvorgang() {
   Serial.println("🔊 Fütterungswarnung: 3x Beep...");
   buzzer_warnung();
   
-  // 3 Sekunden warten nach Buzzer-Warnung
-  Serial.println("⏱️ 3 Sekunden warten...");
-  safeDelay(3000);
+  // Vorwarnzeit nach Buzzer-Warnung abwarten
+  Serial.print("⏱️ ");
+  Serial.print(BUZZER_VORWARNUNG);
+  Serial.println(" Sekunden warten...");
+  safeDelay((unsigned long)BUZZER_VORWARNUNG * 1000UL);
   
   Serial.println("→ Relais aktivieren...");
   digitalWrite(RELAY_PIN, HIGH);           // Motortreiber mit Strom versorgen
