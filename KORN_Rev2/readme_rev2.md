@@ -46,6 +46,8 @@ Der Arduino steuert über eine **DS3231 Echtzeituhr (RTC)** eine tägliche Fütt
 - SCL → Arduino A5 (SCL)
 - SQW → nicht anschließen! (Pin 2 ist durch PUL belegt; bei Bedarf z. B. Pin 7 nutzen)
 
+> 📌 **TODO / Ersatzteil:** Das RTC-Modul soll gegen ein **ZS-042 (DS3231)** mit **LIR2032** getauscht werden. Die LIR2032 ist wiederaufladbar und wird über die onboard-Ladeschaltung des ZS-042 geladen — damit entfällt der periodische Batteriewechsel und das Risiko, eine CR2032 zu überladen. Anschluss identisch (I2C: SDA=A4, SCL=A5, VCC=5V).
+
 **Motortreiber:**
 - PUL+ → Arduino Pin 2
 - DIR+ → Arduino Pin 3

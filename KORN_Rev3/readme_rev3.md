@@ -69,6 +69,7 @@ Relay:
   - ⚠️ **KRITISCH**: VCC MUSS an 5V! Mit 3,3V funktioniert die RTC nicht und verursacht Bootloops!
   - CR2032-Stützbatterie einsetzen (~5 Jahre Lebensdauer)
   - Gemeinsame Masse (GND) mit Arduino und Peripherie sicherstellen
+  - 📌 **TODO / Ersatzteil:** Die RTC soll gegen ein **ZS-042 (DS3231)** mit **LIR2032** getauscht werden — die LIR2032 ist wiederaufladbar und wird über die onboard-Ladeschaltung geladen, kein periodischer Batteriewechsel nötig. ⚠️ Achtung: Das ZS-042 ist ein **DS3231/I2C-Modul** (SDA=A4, SCL=A5) — Rev3 verwendet die **DS1302** (3-Draht-RTC an D7/D9/D12). Ein Wechsel erfordert neue Verdrahtung und die Rev3.1-Firmware; die Module sind nicht direkt austauschbar.
 * **DM320T** (Common-Cathode): 
   - PUL−, DIR−, ENA− an Arduino GND
   - OPTO nicht am Arduino verwenden -> Muss an +5V Versorgung

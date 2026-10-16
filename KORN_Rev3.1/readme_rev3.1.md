@@ -70,6 +70,7 @@ Relay:
   - SDA an A4, SCL an A5 (I2C)
   - Gemeinsame Masse (GND) mit Arduino und Peripherie sicherstellen
   - ⚠️ **Backup-Batterie**: Viele DS3231-Module laden die Backup-Zelle. Verwende nur eine **wiederaufladbare LIR2032** (inkl. passender Ladeschaltung) oder bau die Ladeschaltung aus. Eine nicht wiederaufladbare **CR2032** kann bei dauerhaftem Laden auslaufen, heiß werden oder platzen.
+  - 📌 **TODO / Ersatzteil:** Das RTC-Modul soll gegen ein **ZS-042 (DS3231)** mit **LIR2032** getauscht werden — die LIR2032 ist wiederaufladbar und wird über die onboard-Ladeschaltung des ZS-042 geladen; der periodische Batteriewechsel entfällt damit. Anschluss identisch (I2C: SDA=A4, SCL=A5, VCC=5V).
 * **DM320T** (Common-Cathode, Standard): 
   - `OPTO` → Arduino GND
   - `PUL+` → Arduino D2, `PUL−` → GND
