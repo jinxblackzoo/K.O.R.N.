@@ -317,7 +317,7 @@ KORN_Rev3/
 │       └── motor.ino
 ├── pics_video_additional-info/
 │   └── DM320T_user_manual.txt
-└── README.md
+└── readme_rev3.md
 ```
 
 ### ⚙️ DM320T DIP‑Schalter (Strom/Microstep)

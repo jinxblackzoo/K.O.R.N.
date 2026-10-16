@@ -17,7 +17,8 @@
  *  - "AccelStepper" Version 1.61+       (für Schrittmotor-Steuerung)
  *  - WiFiS3 (vorinstalliert)             (für Arduino UNO R4 WiFi)
  *  - EEPROM (vorinstalliert)             (für Backup-Speicherung)
- *  - avr/wdt.h (nur AVR, vorinstalliert) (für Watchdog, nicht auf UNO R4)
+ *  - WDT.h (UNO R4, vorinstalliert)      (Hardware-Watchdog)
+ *  - avr/wdt.h (nur AVR, vorinstalliert) (für Watchdog auf AVR-Boards)
  *
  * Board: Arduino UNO R4 WiFi
  * Board Package: Arduino UNO R4 Boards (arduino:renesas_uno)
@@ -25,14 +26,20 @@
 
 // Vorwärtsdeklaration: nötig, damit Arduino-Präprozessor-Prototypen KConfig kennen
 struct KConfig;
+struct FeedState;
 
 #include <Arduino.h>
 #include <EEPROM.h>     // EEPROM-Backup für Konfiguration
-// Watchdog nur für AVR-basierte Arduinos (UNO R4 nutzt anderen Mechanismus)
+// Watchdog: UNO R4 nutzt WDT.h, AVR nutzt avr/wdt.h
 #ifdef __AVR__
   #include <avr/wdt.h>
-  #define WATCHDOG_ENABLED
+  #define WATCHDOG_AVR
+#else
+  #include <WDT.h>           // Arduino UNO R4 Watchdog
+  #define WATCHDOG_R4
 #endif
+#define WATCHDOG_ENABLED
+#define WATCHDOG_TIMEOUT_MS 4000UL  // 4s – Refresh in loop() und waehrend Motorlauf
 #include <AccelStepper.h>
 #include <WiFiS3.h>
 #include <Wire.h>            // I2C-Bus für DS3231
@@ -55,6 +62,9 @@ const uint16_t STATUS_INTERVAL_S = 60;
 const uint16_t MIN_GAP_MIN = 2;
 // Arming-Window nach Boot: geplante Fütterungen erst nach diesem Zeitfenster erlauben
 const uint32_t ARMING_WINDOW_MS = 60000UL;
+// Nachhol-Fenster (aus Rev2.1): wurde die Zielzeit verpasst (z. B. Stromausfall),
+// wird innerhalb dieses Fensters nach dem Wiederanlauf einmalig nachgefüttert.
+const uint16_t CATCHUP_WINDOW_MIN = 60;
 // WLAN-Reconnect Intervall (Millisekunden) - 0 = deaktiviert für Off-Grid AP-Modus
 const uint32_t WIFI_CHECK_INTERVAL_MS = 0UL;
 
@@ -76,7 +86,7 @@ static RTC_DS3231 rtc;
 void motorInit();
 void motorEnable(bool on);
 void motorReset();
-bool motorFeed(int steps, bool dirCW);
+bool motorFeed(int steps, bool dirCW, bool playSignal);
 
 void apInit(const char* ssid, const char* pass);
 void apCheckAndReconnect();
@@ -110,6 +120,12 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 // Batterie-Indikator (softwarebasiert): RTC-Zeit gültig
 bool batteryLikelyOK();
 
+// Watchdog-Refresh: in loop() und aus motor.ino während Motorlauf aufgerufen
+void watchdogRefresh();
+// Event-Log (Ringpuffer, letzte Einträge auf der Homepage)
+void logEvent(const char* msg);
+void logRenderBox(WiFiClient &client);
+
 // ============================================================================
 // Serielle Minimal-Ausgabe
 // ============================================================================
@@ -120,6 +136,7 @@ static int lastFeedMinute = -1;   // letzte Fütterung (MM)
 static int lastFeedSecond = -1;   // letzte Fütterung (SS)
 static int lastFeedSteps = -1;    // letzte Fütterung (Schritte)
 static uint8_t lastKnownDay = 0;  // zur Erkennung des Tageswechsels
+static uint8_t lastKnownMonth = 0; // Monat dazu (verhindert Fehl-Reset bei Monatswechsel)
 static bool fedToday1 = false;    // Marker: Fütterung 1 heute ausgeführt
 static bool fedToday2 = false;    // Marker: Fütterung 2 heute ausgeführt
 static bool feedingInProgress = false; // einfache Reentrancy-Sperre
@@ -170,12 +187,20 @@ static bool gCfgFromEeprom = false; // Herkunft: true=aus EEPROM geladen, false=
 static bool gRtcPresent = false;
 static bool gRtcPowerLossDetected = false;
 
+// Prüft einen gelesenen Zeitstempel auf Plausibilität (alle Felder, aus Rev2.1).
+// Bei I2C-Störungen können einzelne Register Müllwerte liefern – nur das Jahr
+// zu prüfen reicht nicht.
+static bool rtcTimePlausible(const DateTime &now) {
+  return now.year() >= 2024 && now.year() <= 2099
+      && now.month() >= 1 && now.month() <= 12
+      && now.day() >= 1 && now.day() <= 31
+      && now.hour() <= 23 && now.minute() <= 59 && now.second() <= 59;
+}
+
 // Prüft, ob die DS3231 eine plausibel gültige Zeit liefert
 static bool rtcIsValid() {
   if (!gRtcPresent) return false;
-  DateTime now = rtc.now();
-  int y = now.year();
-  return (y >= 2024 && y <= 2099);
+  return rtcTimePlausible(rtc.now());
 }
 
 static void rtcApplyTime(const DateTime &value) {
@@ -193,6 +218,7 @@ static void rtcApplyTime(const DateTime &value) {
   lastNowSec = value.hour() * 3600 + value.minute() * 60 + value.second();
   lastNowMs = millis();
   lastKnownDay = value.day();
+  lastKnownMonth = value.month();
   pendingSched1 = false;
   pendingSched2 = false;
   if (!sameDate) {
@@ -212,13 +238,11 @@ static bool getNow(DateTime &outDt, int &outSec) {
     if (gRtcPresent) {
       // RTC neu erkannt, aber evtl. ohne gültige Zeit -> Kompilierzeit setzen
       outDt = rtc.now();
-      int y = outDt.year();
-      if (y < 2024 || y > 2099) {
+      if (!rtcTimePlausible(outDt)) {
         rtcApplyTime(DateTime(__DATE__, __TIME__));
       }
       outDt = rtc.now();
-      y = outDt.year();
-      if (y >= 2024 && y <= 2099) {
+      if (rtcTimePlausible(outDt)) {
         outSec = (int)outDt.hour() * 3600 + (int)outDt.minute() * 60 + (int)outDt.second();
         return true;
       }
@@ -227,8 +251,7 @@ static bool getNow(DateTime &outDt, int &outSec) {
 
   if (gRtcPresent) {
     outDt = rtc.now();
-    int y = outDt.year();
-    if (y >= 2024 && y <= 2099) {
+    if (rtcTimePlausible(outDt)) {
       outSec = (int)outDt.hour() * 3600 + (int)outDt.minute() * 60 + (int)outDt.second();
       return true;
     }
@@ -327,6 +350,149 @@ static void cfgSaveToEeprom() {
   gCfgFromEeprom = true;
 }
 
+// =========================================================================
+// Persistenter Fütterungszustand (aus Rev2.1/Rev3.5):
+// lastFeed*, fedToday1/2 und Datum liegen im EEPROM. Nach Stromausfall/Reboot
+// weiss das Gerät, ob heute schon gefüttert wurde – und kann Verpasstes
+// innerhalb des Nachhol-Fensters (CATCHUP_WINDOW_MIN) nachfüttern.
+// =========================================================================
+#define FEED_STATE_MAGIC 0x4644  // 'DF' = D Feed
+struct FeedState {
+  uint16_t magic;
+  int8_t   lastH;         // -1 = noch nie
+  int8_t   lastM;
+  int8_t   lastS;
+  uint32_t lastSteps;     // 0xFFFFFFFF wenn unbekannt
+  uint8_t  lastSrc;
+  uint8_t  fedToday1;     // 0/1
+  uint8_t  fedToday2;     // 0/1
+  uint8_t  day;           // Tag+Monat zur Tagesidentifikation
+  uint8_t  month;
+  uint16_t crc;
+};
+
+#define EEPROM_FEEDSTATE_ADDR 32  // hinter KConfig (~16 Bytes ab Adresse 0)
+
+static uint16_t feedStateChecksum(const FeedState &fs) {
+  uint32_t s = 0;
+  s += (uint8_t)fs.lastH + (uint8_t)fs.lastM + (uint8_t)fs.lastS;
+  s += fs.lastSteps & 0xFF; s += (fs.lastSteps >> 8) & 0xFF;
+  s += (fs.lastSteps >> 16) & 0xFF; s += (fs.lastSteps >> 24) & 0xFF;
+  s += fs.lastSrc + fs.fedToday1 + fs.fedToday2 + fs.day + fs.month;
+  return (uint16_t)((s & 0xFFFFu) ^ 0x5A5Au);
+}
+
+// Aktuelle Fütterungs-Zustände ins EEPROM schreiben
+static void feedStateSave() {
+  FeedState fs;
+  fs.magic = FEED_STATE_MAGIC;
+  fs.lastH = (int8_t)((lastFeedHour >= -128 && lastFeedHour <= 127) ? lastFeedHour : -1);
+  fs.lastM = (int8_t)((lastFeedMinute >= -128 && lastFeedMinute <= 127) ? lastFeedMinute : -1);
+  fs.lastS = (int8_t)((lastFeedSecond >= -128 && lastFeedSecond <= 127) ? lastFeedSecond : -1);
+  fs.lastSteps = (lastFeedSteps >= 0) ? (uint32_t)lastFeedSteps : 0xFFFFFFFFu;
+  fs.lastSrc = lastFeedSrc;
+  fs.fedToday1 = fedToday1 ? 1 : 0;
+  fs.fedToday2 = fedToday2 ? 1 : 0;
+  fs.day = lastKnownDay;
+  fs.month = lastKnownMonth;
+  fs.crc = feedStateChecksum(fs);
+  EEPROM.put(EEPROM_FEEDSTATE_ADDR, fs);
+}
+
+// Fütterungs-Zustand aus EEPROM laden (einmalig beim Boot)
+static void feedStateLoad() {
+  FeedState fs;
+  EEPROM.get(EEPROM_FEEDSTATE_ADDR, fs);
+  if (fs.magic != FEED_STATE_MAGIC) return;  // unbeschrieben oder defekt
+  if (fs.crc != feedStateChecksum(fs)) {
+    Serial.println(F("FeedState CRC-Fehler - ignoriert."));
+    logEvent("FEHLER: FeedState CRC");
+    return;
+  }
+  lastFeedHour = fs.lastH;
+  lastFeedMinute = fs.lastM;
+  lastFeedSecond = fs.lastS;
+  lastFeedSteps = (fs.lastSteps == 0xFFFFFFFFu) ? -1 : (int)fs.lastSteps;
+  lastFeedSrc = fs.lastSrc;
+  fedToday1 = (fs.fedToday1 != 0);
+  fedToday2 = (fs.fedToday2 != 0);
+  lastKnownDay = fs.day;
+  lastKnownMonth = fs.month;
+  Serial.print(F("FeedState geladen: last="));
+  Serial.print(lastFeedHour); Serial.print(':');
+  Serial.print(lastFeedMinute);
+  Serial.print(F(" fedToday1="));
+  Serial.print(fedToday1 ? F("ja") : F("nein"));
+  Serial.print(F(" fedToday2="));
+  Serial.println(fedToday2 ? F("ja") : F("nein"));
+}
+
+// =========================================================================
+// Event-Log: kleiner Ringpuffer im RAM; die letzten 10 Eintraege werden auf
+// der Homepage angezeigt. Erlaubt Fehlersuche ohne dauernden Serial-Monitor.
+// =========================================================================
+struct LogEntry {
+  uint32_t ms;        // millis() beim Eintrag
+  int8_t   day;       // Tag des Monats (RTC), -1 wenn unbekannt
+  int32_t  daySec;    // Sekunde des Tages, -1 wenn unbekannt
+  char     msg[48];
+};
+#define LOG_BUF_SIZE 10
+static LogEntry gLogBuf[LOG_BUF_SIZE];
+static uint8_t gLogHead = 0;
+static uint8_t gLogCount = 0;
+
+void logEvent(const char* msg) {
+  LogEntry &e = gLogBuf[gLogHead];
+  e.ms = millis();
+  // Zeitstempel aus RTC oder millis()-Fallback
+  DateTime dt;
+  int sec = -1;
+  getNow(dt, sec);
+  e.daySec = sec;
+  e.day = (sec >= 0 && rtcIsValid()) ? (int8_t)dt.day() : -1;
+  size_t n = strlen(msg);
+  if (n >= sizeof(e.msg)) n = sizeof(e.msg) - 1;
+  memcpy(e.msg, msg, n);
+  e.msg[n] = '\0';
+  gLogHead = (gLogHead + 1) % LOG_BUF_SIZE;
+  if (gLogCount < LOG_BUF_SIZE) gLogCount++;
+}
+
+// Rendert die letzten Eintraege als kompakte HTML-Box (Aufruf aus homepage.ino)
+void logRenderBox(WiFiClient &client) {
+  client.print(F("<div style=\"border:1px solid #ccc;border-radius:6px;padding:6px;margin-top:10px;font-size:12px;background:#fafafa\">"));
+  client.print(F("<b>Log</b> (letzte ")); client.print(LOG_BUF_SIZE); client.print(F(" Eintr&auml;ge, neueste zuerst):<br>"));
+  if (gLogCount == 0) {
+    client.print(F("<small>keine Eintr&auml;ge</small>"));
+  }
+  // Neueste zuerst
+  for (uint8_t i = 0; i < gLogCount; i++) {
+    uint8_t idx = (uint8_t)((gLogHead + LOG_BUF_SIZE - 1 - i) % LOG_BUF_SIZE);
+    LogEntry &e = gLogBuf[idx];
+    client.print(F("<small><code>"));
+    if (e.daySec >= 0) {
+      char tb[24];
+      if (e.day >= 0) {
+        snprintf(tb, sizeof(tb), "%02d. %02d:%02d:%02d", e.day,
+                 (int)(e.daySec / 3600), (int)((e.daySec / 60) % 60), (int)(e.daySec % 60));
+      } else {
+        snprintf(tb, sizeof(tb), "%02d:%02d:%02d",
+                 (int)(e.daySec / 3600), (int)((e.daySec / 60) % 60), (int)(e.daySec % 60));
+      }
+      client.print(tb);
+    } else {
+      char ub[16];
+      snprintf(ub, sizeof(ub), "up%lus", e.ms / 1000UL);
+      client.print(ub);
+    }
+    client.print(F(" | "));
+    client.print(e.msg);
+    client.print(F("</code></small><br>"));
+  }
+  client.print(F("</div>"));
+}
+
 // Getter/Setter-Impl.
 int cfgGetH1() { return gCfg.h1; }
 int cfgGetM1() { return gCfg.m1; }
@@ -349,6 +515,9 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
   gCfg.crc = cfgChecksum(gCfg);
   cfgApplyToRuntime();
   cfgSaveToEeprom();
+  // Fütterungszustand mitsichern, damit EEPROM konsistent zum neuen Plan bleibt
+  feedStateSave();
+  logEvent("Konfiguration gespeichert");
 }
 
 // Hilfsfunktion twoDigits() entfernt, um String-Allokationen zu vermeiden
@@ -562,10 +731,17 @@ static void printStatusPeriodic() {
 // RTC-Zeit bei Upload setzen (DS3231)
 // ============================================================================
 static void rtcInitAndMaybeSet() {
+  // I2C-Timeout (aus Rev2.1): bei Bus-Störung nach 3s abbrechen statt ewig zu
+  // hängen – rtc.now() wird oft aufgerufen, ein verklemmerter Bus würde sonst
+  // den kompletten Betrieb stoppen.
+#if defined(WIRE_HAS_TIMEOUT)
+  Wire.setWireTimeout(3000, true);
+#endif
   // Initialisierung der DS3231 (I2C) via RTClib
   gRtcPresent = rtc.begin();
   if (!gRtcPresent) {
     Serial.println(F("FEHLER: DS3231 nicht gefunden (I2C: SDA=A4, SCL=A5 pruefen)"));
+    logEvent("FEHLER: DS3231 nicht gefunden");
     // Trotzdem millis()-Fallback aktivieren, damit Anzeige/Scheduler laeuft
     lastNowSec = 0;
     lastNowMs = millis();
@@ -575,6 +751,18 @@ static void rtcInitAndMaybeSet() {
   gRtcPowerLossDetected = rtc.lostPower();
   if (gRtcPowerLossDetected || !rtcIsValid()) {
     rtcApplyTime(DateTime(__DATE__, __TIME__));
+    logEvent("RTC Stromverlust/ungueltig -> Build-Zeit gesetzt");
+  }
+  // Sanity-Check (aus Rev2.1): Liegt die RTC-Zeit deutlich hinter der
+  // Kompilierzeit, wurde sie vermutlich zurückgesetzt -> angleichen.
+  // Vor Build liegende Zeit würde sonst Fütterungen überspringen.
+  if (rtcIsValid()) {
+    DateTime build(F(__DATE__), F(__TIME__));
+    DateTime nowCheck = rtc.now();
+    if (nowCheck.unixtime() + 60 < build.unixtime()) {
+      rtcApplyTime(build);
+      logEvent("RTC hinter Build-Zeit -> korrigiert");
+    }
   }
 }
 
@@ -583,14 +771,16 @@ static void rtcInitAndMaybeSet() {
 // ============================================================================
 void setup() {
   Serial.begin(115200);
-  
-  // Watchdog TEMPORÄR DEAKTIVIERT ZUM DEBUGGEN
-  #ifdef WATCHDOG_ENABLED
-    // wdt_enable(WDTO_8S);  // AUSKOMMENTIERT ZUM TESTEN
-    Serial.println(F("Watchdog: DEAKTIVIERT (Debug-Modus)"));
-  #else
-    Serial.println(F("Watchdog: nicht verfügbar (UNO R4)"));
-  #endif
+  // Auf Serial max. 2s warten – ohne USB-Verbindung nicht hängen bleiben
+  {
+    unsigned long serialStart = millis();
+    while (!Serial && (millis() - serialStart) < 2000UL) { ; }
+  }
+
+  // HINWEIS: Watchdog wird erst NACH apInit()/webInit() aktiviert.
+  // WiFi.beginAP() kommuniziert mit dem ESP32-S3 WiFi-Coprozessor und kann
+  // intern laenger als 4s blockieren. Der Watchdog schuetzt danach den
+  // 24/7-Betrieb (Loop, Motor, Web-Handler).
 
   rtcInitAndMaybeSet();
 
@@ -598,9 +788,44 @@ void setup() {
   cfgLoadFromEeprom();
   cfgApplyToRuntime();
 
+  // Persistenter Fütterungszustand (lastFeed*, fedToday1/2) – verhindert
+  // Doppel-Fütterung nach Stromausfall und ermoeglicht das Nachhol-Fenster.
+  feedStateLoad();
+  // Tageswechsel zwischen letztem Lauf und jetzt? -> Tagesmarker zurücksetzen
+  if (rtcIsValid()) {
+    DateTime now = rtc.now();
+    if (lastKnownDay != now.day() || lastKnownMonth != now.month()) {
+      fedToday1 = false;
+      fedToday2 = false;
+      lastKnownDay = now.day();
+      lastKnownMonth = now.month();
+      feedStateSave();
+      logEvent("BOOT: Tageswechsel, fed-Marker reset");
+    } else {
+      logEvent("BOOT");
+    }
+  } else {
+    logEvent("BOOT ohne RTC-Zeit");
+  }
+
   motorInit();         // Pins, Treiber in sicheren Zustand, ggf. AccelStepper init
   apInit("KORN", "Chaosfeeder"); // AP-Insellösung, feste IP folgt in ap.ino
   webInit();
+
+  // Watchdog JETZT aktivieren (nach allen blockierenden Init-Calls)
+  #if defined(WATCHDOG_ENABLED) && defined(WATCHDOG_R4)
+    WDT.begin(WATCHDOG_TIMEOUT_MS);
+    Serial.print(F("Watchdog: AKTIV (UNO R4, "));
+    Serial.print(WATCHDOG_TIMEOUT_MS);
+    Serial.println(F("ms)"));
+    logEvent("Watchdog aktiv");
+  #elif defined(WATCHDOG_ENABLED) && defined(WATCHDOG_AVR)
+    wdt_enable(WDTO_4S);
+    Serial.println(F("Watchdog: AKTIV (AVR, 4s)"));
+    logEvent("Watchdog aktiv (AVR)");
+  #else
+    Serial.println(F("Watchdog: DEAKTIVIERT"));
+  #endif
 
   // Manuelle Auslösung vorbereiten
   pinMode(MANUAL_TRIGGER_PIN, INPUT_PULLUP);
@@ -610,18 +835,20 @@ void setup() {
   printStatusStartup();
   lastStatusMs = millis();
   bootMs = lastStatusMs;
+}
 
-  // Tageswechsel-Erkennung initialisieren
-  if (rtcIsValid()) {
-    lastKnownDay = rtc.now().day();
-  }
+// Watchdog-Refresh: einmal pro loop() und waehrend Motorlauf (motor.ino)
+void watchdogRefresh() {
+  #if defined(WATCHDOG_ENABLED) && defined(WATCHDOG_R4)
+    WDT.refresh();
+  #elif defined(WATCHDOG_ENABLED) && defined(WATCHDOG_AVR)
+    wdt_reset();
+  #endif
 }
 
 void loop() {
   // Watchdog zurücksetzen (verhindert Reset bei normaler Operation)
-  #ifdef WATCHDOG_ENABLED
-    wdt_reset();
-  #endif
+  watchdogRefresh();
   
   // WLAN-Status prüfen und ggf. reconnecten (nur wenn aktiviert)
   if (WIFI_CHECK_INTERVAL_MS > 0) {
@@ -688,16 +915,19 @@ void loop() {
     }
 
     // Tageswechsel erkennen → Marker zurücksetzen
-    if (rtcOk && lastKnownDay != nowRtc.day()) {
+    if (rtcOk && (lastKnownDay != nowRtc.day() || lastKnownMonth != nowRtc.month())) {
       fedToday1 = false;
       fedToday2 = false;
       pendingSched1 = false;
       pendingSched2 = false;
       lastNowSec = nowSec;
       lastNowMs = nowMs;
+      logEvent("Tageswechsel: fed-Marker reset");
+      feedStateSave();
     } else if (!rtcOk && nowSec < lastNowSec && lastNowSec >= 86300 && nowSec <= 120) {
       // Fallback-Mitternacht wenn RTC nicht verfuegbar
       Serial.println(F("RTC: Mitternacht via Fallback erkannt"));
+      logEvent("Mitternacht via millis-Fallback");
       fedToday1 = false;
       fedToday2 = false;
       pendingSched1 = false;
@@ -707,6 +937,7 @@ void loop() {
     }
     if (rtcOk) {
       lastKnownDay = nowRtc.day();
+      lastKnownMonth = nowRtc.month();
     }
 
     // Zeit-Sprung-Detektion (z.B. RTC-Reset, Batterieprobleme oder manuelles Setzen)
@@ -716,6 +947,7 @@ void loop() {
     int secDiff = (nowSec - lastNowSec + 86400) % 86400;
     if (secDiff > expectedSecDiff) {
       Serial.println(F("RTC: Zeit sprang - Scheduler reset"));
+      logEvent("RTC Zeitsprung erkannt");
       lastNowSec = nowSec;
       lastNowMs = nowMs;
       return;
@@ -872,6 +1104,43 @@ void loop() {
           }
         }
       }
+
+      // Nachhol-Fenster (aus Rev2.1): War das Geraet zur Zielzeit aus (Strom-/
+      // Solar-Ausfall) oder kam die RTC erst danach zurueck, wurde kein Crossing
+      // gesehen. Innerhalb von CATCHUP_WINDOW_MIN nach der Zielzeit wird dann
+      // einmalig nachgefuettert. fedToday1/2 sind persistent (EEPROM) und
+      // verhindern Doppelfuetterung ueber Reboots hinweg.
+      if (!didTrigger && !fedToday1 && !pendingSched1) {
+        int dt1 = nowSec - t1Sec; // >0: Zielzeit heute bereits vorbei
+        if (dt1 > 0 && dt1 <= (int)CATCHUP_WINDOW_MIN * 60) {
+          if (deltaLastSec >= (int)MIN_GAP_MIN * 60) {
+            Serial.println(F("TRIG:SCHED1(nachholen)"));
+            logEvent("SCHED1 nachgeholt");
+            nextFeedSrc = SRC_SCHED1;
+            if (requestImmediateFeed()) { fedToday1 = true; didTrigger = true; }
+          } else {
+            pendingSched1 = true; // erst nach Mindestabstand nachholen
+          }
+        }
+      }
+      if (!didTrigger && gCfg.active2 && !fedToday2 && !pendingSched2) {
+        int dt2 = nowSec - t2Sec;
+        if (dt2 > 0 && dt2 <= (int)CATCHUP_WINDOW_MIN * 60) {
+          int dSec = 999999;
+          if (lastFeedHour >= 0 && lastFeedMinute >= 0) {
+            int lastS = lastFeedHour * 3600 + lastFeedMinute * 60 + ((lastFeedSecond >= 0) ? lastFeedSecond : 0);
+            dSec = nowSec - lastS; if (dSec < 0) dSec += 24 * 3600;
+          }
+          if (dSec >= (int)MIN_GAP_MIN * 60) {
+            Serial.println(F("TRIG:SCHED2(nachholen)"));
+            logEvent("SCHED2 nachgeholt");
+            nextFeedSrc = SRC_SCHED2;
+            if (requestImmediateFeed()) { fedToday2 = true; }
+          } else {
+            pendingSched2 = true;
+          }
+        }
+      }
     } else if (feedingInProgress) {
       // Während Fütterung merken wir Crossings in diesem Intervall als pending
       if (!fedToday1 && crossed1) pendingSched1 = true;
@@ -910,7 +1179,8 @@ bool requestImmediateFeed() {
       lastFeedSecond = nowSec % 60;
     }
     if (rtcOk) {
-      lastKnownDay = nowDt.day(); // sicherstellen
+      lastKnownDay = nowDt.day();   // sicherstellen
+      lastKnownMonth = nowDt.month();
     }
     // Letzte Schritte merken
     lastFeedSteps = gCfg.steps;
@@ -919,8 +1189,15 @@ bool requestImmediateFeed() {
     lastFeedSrc = nextFeedSrc;
     nextFeedSrc = SRC_NONE;
 
+    // Zustand persistent sichern (aus Rev2.1): nach Reboot bleibt bekannt,
+    // dass gefuettert wurde -> keine Doppelfuetterung, Nachhol-Logik korrekt.
+    feedStateSave();
+    logEvent("FEED ok");
+
     // Optional: Stepper-Reset-Hook
     motorReset();
+  } else {
+    logEvent("FEHLER: Fuetterung fehlgeschlagen");
   }
 
   feedingInProgress = false;

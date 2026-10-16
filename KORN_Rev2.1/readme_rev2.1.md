@@ -95,8 +95,10 @@ const bool ZEIT_EINSTELLEN = false;    // Nur true, wenn lostPower() oder expliz
 
 ## Fehlerverhalten / Sicherheit
 
-- **RTC nicht gefunden:** Wird die DS3231 beim Start nicht erkannt, wird alle 5 Sekunden ein neuer Verbindungsversuch unternommen. Sobald die RTC wieder erreichbar ist, startet das System normal weiter.
-- **Ungültige RTC-Zeit:** Liefert die RTC unplausible Werte (z. B. durch eine I2C-Störung), wird der Durchlauf übersprungen. Das verhindert falsche Tagesresets und Doppelfütterungen.
+- **RTC nicht gefunden:** Wird die DS3231 beim Start nicht erkannt, wartet das Gerät max. 30 Sekunden und bootet dann trotzdem (statt dauerhaft im Setup zu hängen). Im laufenden Betrieb wird alle 5 Sekunden ein neuer Verbindungsversuch unternommen; die Fütterung pausiert, bis die RTC wieder erreichbar ist.
+- **Ungültige RTC-Zeit:** Liefert die RTC unplausible Werte (z. B. durch eine I2C-Störung), wird der Durchlauf übersprungen und die RTC anschließend neu initialisiert. Das verhindert falsche Tagesresets und Doppelfütterungen.
+- **Motor-Timeout:** Der Motorlauf bricht nach erwarteter Laufzeit + Rampe + 4 Sekunden Reserve ab. So kann ein fehlerhafter Motorlauf nicht endlos weiterdrehen; Relais und Treiber werden danach abgeschaltet.
+- **I2C-Timeout:** `Wire.setWireTimeout(3000)` – eine gestörte RTC-Verbindung blockiert den Betrieb max. 3 s statt ewig.
 - **Watchdog:** Aktuell deaktiviert, da er einen Reset-Loop verursacht hat. Soll später über einen Hardware-Timer sauber wieder integriert werden.
 
 ## Fütterungslogik in einfachen Worten
@@ -141,13 +143,14 @@ Für den Arduino werden folgende Bibliotheken benötigt:
 
 ## Code-Verlauf
 
-1. **Setup:** Initialisierung von RTC, I2C, Ausgängen und Auslesen des letzten Fütterungsdatums aus dem EEPROM. Serielle Ausgabe erfolgt mit 9600 Baud. Optional: Jumper Pin 12↔13 löscht das Fütterungsdatum.
+1. **Setup:** Initialisierung von RTC, I2C, Ausgängen und Auslesen des letzten Fütterungsdatums aus dem EEPROM. Serielle Ausgabe erfolgt mit 9600 Baud. Optional: Jumper Pin 12↔13 löscht das Fütterungsdatum. Ist die RTC nicht erreichbar, wird max. 30 s gewartet und trotzdem gebootet.
 2. **Hauptschleife (alle 10 Sekunden):**
-   - Plausibilitätsprüfung der RTC-Zeit.
+   - Bei nicht erreichbarer RTC: alle 5 s erneuter Verbindungsversuch, Fütterung pausiert solange.
+   - Plausibilitätsprüfung der RTC-Zeit (bei Müllwerten: Durchlauf überspringen + RTC neu initialisieren).
    - Alle 30 Sekunden: Ausgabe von aktueller Zeit, Temperatur, letzter Fütterung und Zeit bis zur nächsten Fütterung.
    - Prüfung, ob das heutige oder gestrige Fütterungsfenster aktiv ist und an diesem Tag noch nicht gefüttert wurde.
    - Das Fütterungsdatum wird **vor** dem Motorstart ins EEPROM geschrieben, um Doppelfütterungen zu vermeiden.
-   - Fütterungsvorgang: Relais ein → Motor aktivieren → Futter fördern → Motor deaktivieren → Relais aus.
+   - Fütterungsvorgang: Relais ein → Motor aktivieren → Futter fördern (mit Sicherheits-Timeout) → Motor deaktivieren → Relais aus.
 
 ## Ausblick
 

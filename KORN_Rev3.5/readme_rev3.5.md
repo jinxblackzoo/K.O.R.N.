@@ -500,7 +500,7 @@ KORN_Rev3.5/
 │       └── motor.ino         (Stepper, Relais, Buzzer)
 ├── cad/
 ├── pics_video_additional-info/
-└── README.md
+└── readme_rev3.5.md
 ```
 
 ### ⚙️ DM320T DIP‑Schalter (Strom/Microstep)

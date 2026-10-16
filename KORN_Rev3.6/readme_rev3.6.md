@@ -126,7 +126,7 @@ Falls kein WLAN verfügbar ist, kann KORN im Notfütterungs-Modus laufen:
 
 ```
 KORN_Rev3.6/
-├── README.md
+├── readme_rev3.6.md
 ├── Script_KORN_REV3.6/
 │   └── main/
 │       ├── main.ino        (Setup, Loop, Scheduler, NTP, Konfiguration)

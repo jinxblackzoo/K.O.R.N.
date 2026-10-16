@@ -103,14 +103,24 @@ Relay:
 * **Verzögerungsanzeige**: Bei zu häufigen Fütterungsversuchen wird die exakte Wartezeit angezeigt
 * **Erweiterte Laufzeit**: 1–600 Sekunden (10 Minuten) für unterschiedliche Futtermengen
 * **Live-Updates**: Webseite zeigt aktuelle Uhrzeit und letzte Fütterung in Echtzeit
+* **Nachhol-Fenster** (aus Rev2.1): War das Gerät zur Zielzeit aus (z. B. Strom-/Solar-Ausfall), wird innerhalb von **60 Minuten** nach der Zielzeit einmalig nachgefüttert. Der Zustand „heute schon gefüttert" liegt persistent im EEPROM und verhindert Doppelfütterung nach Reboot.
 
 ### 💾 Konfigurationsspeicherung & Datensicherheit
 * **EEPROM-Speicher**: Konfiguration wird im Arduino-EEPROM gespeichert
+* **Fütterungszustand persistent**: Letzte Fütterung, „heute-gefüttert"-Marker und Datum liegen zusätzlich als geprüfter Datensatz (Magic + CRC) im EEPROM – nach Stromausfall/Reboot weiss das Gerät, ob bereits gefüttert wurde
 * **Batterie-Ausfallschutz**: Bei CR2032-Ausfall wird Config aus EEPROM wiederhergestellt
 * **Status-Anzeige**: 
   - **CFG:EEPROM** = Aus EEPROM geladen (normal)
   - **CFG:DEF** = Standard-Werte (erster Start)
 * **EEPROM-Lebensdauer**: ~100.000 Schreibzyklen (bei normaler Nutzung jahrelang haltbar)
+
+### 🛡️ 24/7-Betriebssicherheit
+* **Hardware-Watchdog (4 s)**: Nutzt `WDT.h` des UNO R4. Aktiviert erst nach dem Boot (WiFi-Init kann >4 s blockieren), Refresh in `loop()` und während des Motorlaufs. Bei Code-Hänger → automatischer Reboot. Abschaltbar über `#define WATCHDOG_ENABLED`
+* **I2C-Timeout**: `Wire.setWireTimeout(3000)` – eine gestörte RTC-Verbindung blockiert den Betrieb max. 3 s statt ewig
+* **Erweiterte RTC-Plausibilität**: Alle Datumsfelder (Jahr/Monat/Tag/h/m/s) werden geprüft, nicht nur das Jahr – I2C-Müllwerte werden erkannt
+* **Build-Zeit-Sanity**: Liegt die RTC-Zeit deutlich hinter der Kompilierzeit (Zurücksetzen), wird sie auf die Build-Zeit korrigiert
+* **Boot ohne USB**: Wartet max. 2 s auf serielle Verbindung – kein Hängen im Feld
+* **millis()-Fallback**: Ohne erreichbare RTC läuft die Uhr per `millis()` weiter, RTC-Retry alle 5 s
 
 ### 📱 Benutzerfreundliche Bedienung
 
@@ -130,6 +140,7 @@ Relay:
   - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
   - Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
   - Batteriestatus (CR2032) als Anzeige-Button: Grün=OK, Rot=Bitte CR2032 tauschen (Heuristik: RTC-Zeit gültig)
+  - **Event-Log-Box**: Die letzten 10 Einträge (Fehler + Ereignisse wie Boot, Tageswechsel, Motor-Timeout, RTC-Probleme, nachgeholte Fütterungen) mit Zeitstempel direkt auf der Startseite – Fehlersuche ohne seriellen Monitor
 * ✅ Manuelle Bedienung:
   - ✅ Kurzschluss Pin 10 ↔ 11 als Taster
   - ✅ Sofortige Fütterung unabhängig vom Zeitplan
@@ -328,7 +339,7 @@ KORN_Rev3.1/
 │       └── motor.ino
 ├── pics_video_additional-info/
 │   └── DM320T_user_manual.txt
-└── README.md
+└── readme_rev3.1.md
 ```
 
 ### ⚙️ DM320T DIP‑Schalter (Strom/Microstep)
@@ -417,6 +428,8 @@ Passende Software‑Einstellungen (bereits im Code vorgesehen):
     - Wird für den Access-Point und den Webserver benötigt (`#include <WiFiS3.h>`)
   - RTClib by Adafruit (Autor: Adafruit / Michael Hord)
     - Unterstützt DS3231-RTC über I2C (`RTC_DS3231`/RTClib)
+  - WDT (im UNO-R4-Core enthalten, kein Download nötig)
+    - Hardware-Watchdog (`#include <WDT.h>`)
 
 Hinweise:
 - Installation jeweils über „Werkzeuge → Bibliotheken verwalten…“, nach den oben genannten Namen suchen.

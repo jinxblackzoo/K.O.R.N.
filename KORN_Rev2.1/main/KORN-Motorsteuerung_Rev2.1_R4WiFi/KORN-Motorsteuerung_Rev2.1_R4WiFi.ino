@@ -71,6 +71,7 @@ RTC_DS3231 rtc;
 // Zustandsvariable für serielle Statusausgabe
 unsigned long letzte_ausgabe_ms = 0;  // millis() der letzten seriellen Zeitausgabe (nicht-blockierend)
 unsigned long jumperGedruecktMs = 0;  // millis() zu dem Jumper erstmals erkannt wurde
+bool rtc_verfuegbar = false;          // DS3231 erfolgreich initialisiert (false = Fütterung pausiert, Retry in loop)
 
 // ============================================================================
 // EEPROM - LETZTE FÜTTERUNGSZEIT
@@ -148,53 +149,64 @@ void setup() {
 #if defined(WIRE_HAS_TIMEOUT)
   Wire.setWireTimeout(3000, true); // 3s Timeout, bei Fehlern Wire zurücksetzen
 #endif
-  if (!rtc.begin()) {
+  rtc_verfuegbar = rtc.begin();
+  if (!rtc_verfuegbar) {
     Serial.println("FEHLER: DS3231 nicht gefunden!");
     Serial.println("Prüfe Verdrahtung:");
     Serial.println("VCC → 3.3V, GND → GND, SDA → A4, SCL → A5");
-    // Dauerhafter Fehler-Alarm: alle 5 Sekunden neuer Verbindungsversuch zur RTC
-    while (!rtc.begin()) {
+    // Max. 30 s auf die RTC warten, danach trotzdem booten statt ewig zu hängen.
+    // loop() versucht alle 5 s erneut; Fütterung pausiert bis die RTC da ist.
+    unsigned long warteStart = millis();
+    while (!rtc_verfuegbar && (millis() - warteStart < 30000UL)) {
       safeDelay(5000);
+      rtc_verfuegbar = rtc.begin();
     }
-    Serial.println("DS3231 wieder gefunden - fahre fort.");
-  }
-  
-  // Zeit und Datum einstellen (automatisch bei Bedarf)
-  bool rtc_verlust = false;
-  if (rtc.lostPower()) {
-    rtc_verlust = true;
-    Serial.println("⚠️ RTC verlor Versorgung – Zeit wird neu gesetzt.");
-  }
-  if (rtc_verlust || ZEIT_EINSTELLEN) {
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
-    Serial.println("📡 DS3231 RTC initialisiert / Zeit gesetzt");
-  } else {
-    Serial.println("⏱️ RTC-Zeit bleibt unverändert (kein Verlust erkannt)");
-  }
-  // Sanity-Check: Falls RTC-Zeit offensichtlich hinter der Build-Zeit liegt, angleichen
-  {
-    DateTime build(F(__DATE__), F(__TIME__));
-    DateTime nowCheck = rtc.now();
-    if (nowCheck.unixtime() + 60 < build.unixtime()) { // >60 s hinter Build-Zeit
-      Serial.println("⚠️ RTC-Zeit liegt vor Build-Zeit – setze auf Build-Zeit.");
-      rtc.adjust(build);
+    if (rtc_verfuegbar) {
+      Serial.println("DS3231 gefunden - fahre fort.");
+    } else {
+      Serial.println("⚠️ DS3231 weiterhin nicht erreichbar - boote trotzdem.");
+      Serial.println("Fütterung pausiert bis die RTC erreichbar ist (Retry alle 5 s).");
     }
   }
-  
-  // Synchronisierte/aktuelle Zeit einmalig anzeigen
-  {
-    DateTime jetzt = rtc.now();
-    Serial.print("📅 Datum: ");
-    Serial.print(jetzt.day(), DEC);
-    Serial.print(".");
-    Serial.print(jetzt.month(), DEC);
-    Serial.print(".");
-    Serial.print(jetzt.year(), DEC);
-    Serial.println();
+
+  // Zeit und Datum einstellen (automatisch bei Bedarf) - nur wenn RTC erreichbar
+  if (rtc_verfuegbar) {
+    bool rtc_verlust = false;
+    if (rtc.lostPower()) {
+      rtc_verlust = true;
+      Serial.println("⚠️ RTC verlor Versorgung – Zeit wird neu gesetzt.");
+    }
+    if (rtc_verlust || ZEIT_EINSTELLEN) {
+      rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+      Serial.println("📡 DS3231 RTC initialisiert / Zeit gesetzt");
+    } else {
+      Serial.println("⏱️ RTC-Zeit bleibt unverändert (kein Verlust erkannt)");
+    }
+    // Sanity-Check: Falls RTC-Zeit offensichtlich hinter der Build-Zeit liegt, angleichen
+    {
+      DateTime build(F(__DATE__), F(__TIME__));
+      DateTime nowCheck = rtc.now();
+      if (nowCheck.unixtime() + 60 < build.unixtime()) { // >60 s hinter Build-Zeit
+        Serial.println("⚠️ RTC-Zeit liegt vor Build-Zeit – setze auf Build-Zeit.");
+        rtc.adjust(build);
+      }
+    }
+
+    // Synchronisierte/aktuelle Zeit einmalig anzeigen
+    {
+      DateTime jetzt = rtc.now();
+      Serial.print("📅 Datum: ");
+      Serial.print(jetzt.day(), DEC);
+      Serial.print(".");
+      Serial.print(jetzt.month(), DEC);
+      Serial.print(".");
+      Serial.print(jetzt.year(), DEC);
+      Serial.println();
+    }
+
+    // Aktuelle Zeit anzeigen
+    zeige_aktuelle_zeit(rtc.now());
   }
-  
-  // Aktuelle Zeit anzeigen
-  zeige_aktuelle_zeit(rtc.now());
   
   // Motor konfigurieren (zeitbasierte Dosierung): feste Schrittfrequenz
   stepper.setMaxSpeed(SCHRITTFREQUENZ);
@@ -207,7 +219,9 @@ void setup() {
   Serial.print("Fütterung: "); 
   formatiere_zeit(FUETTERUNG_STUNDE_1, FUETTERUNG_MINUTE_1);
   Serial.println("-------------------------------------------");
-  zeige_fuetterungsstatus(rtc.now());
+  if (rtc_verfuegbar) {
+    zeige_fuetterungsstatus(rtc.now());
+  }
   Serial.println("System bereit! Loop alle 10 s, Statusausgabe alle 10 s.");
   Serial.println("===========================================");
 }
@@ -215,6 +229,21 @@ void setup() {
 void loop() {
   // Jumper-Reset auch im laufenden Betrieb ermöglichen (mind. 3 s halten)
   checkJumperReset(false);
+
+  // RTC war beim Boot nicht erreichbar (oder ging verloren): alle 5 s
+  // erneut versuchen statt das Gerät zu blockieren. Fütterung pausiert.
+  if (!rtc_verfuegbar) {
+    static unsigned long letzter_rtc_versuch_ms = 0;
+    if (letzter_rtc_versuch_ms == 0 || (millis() - letzter_rtc_versuch_ms >= 5000UL)) {
+      letzter_rtc_versuch_ms = millis();
+      if (rtc.begin()) {
+        rtc_verfuegbar = true;
+        Serial.println("DS3231 gefunden - Normalbetrieb.");
+      }
+    }
+    safeDelay(1000);
+    return;
+  }
 
   DateTime jetzt = rtc.now();
 
@@ -224,6 +253,7 @@ void loop() {
       jetzt.day() < 1 || jetzt.day() > 31 ||
       jetzt.hour() > 23 || jetzt.minute() > 59 || jetzt.second() > 59) {
     Serial.println("⚠️ Ungültige RTC-Zeit gelesen - Durchlauf wird übersprungen!");
+    rtc_verfuegbar = false;  // RTC neu initialisieren (Retry-Pfad oben)
     safeDelay(1000);
     return;
   }
@@ -319,9 +349,16 @@ void fuetterungsvorgang() {
   } else {
     stepper.move(-schritte);               // relative Bewegung gegen Uhrzeigersinn
   }
-  // Bewegung ausführen (blockierend)
+  // Bewegung ausführen (blockierend, mit Sicherheits-Timeout aus Rev3.1:
+  // erwartete Laufzeit + Rampe + 4 s Reserve; verhindert Endloslauf bei Fehlern)
+  unsigned long erwartetMs = (unsigned long)(labs(schritte) / (long)(SCHRITTFREQUENZ > 0 ? SCHRITTFREQUENZ : 1) * 1000L);
+  unsigned long deadline = millis() + erwartetMs + 4000UL;
   while (stepper.distanceToGo() != 0) {
     stepper.run();
+    if ((long)(millis() - deadline) > 0) {
+      Serial.println("⚠️ TIMEOUT: Motorlauf abgebrochen (Sicherheit)!");
+      break;
+    }
   }
   
   Serial.println("→ Motor stoppen...");

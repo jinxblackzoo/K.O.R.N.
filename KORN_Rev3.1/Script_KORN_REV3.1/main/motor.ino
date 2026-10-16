@@ -192,14 +192,13 @@ bool motorFeed(int steps, bool dirCW, bool playSignal) {
     }
 
     // Watchdog alle 2 Sekunden zurücksetzen während Motorlauf
-    #ifdef __AVR__
-      if (millis() - lastWdReset > 2000) {
-        wdt_reset();
-        lastWdReset = millis();
-      }
-    #endif
+    if (millis() - lastWdReset > 2000) {
+      watchdogRefresh();
+      lastWdReset = millis();
+    }
     if ((long)(millis() - deadline) > 0) {
       Serial.println(F("TIMEOUT: Sicherheitsabbruch!"));
+      logEvent("FEHLER: Motor-Timeout");
       motorTimeout = true;
       break; // Sicherheitsabbruch
     }
@@ -212,12 +211,10 @@ bool motorFeed(int steps, bool dirCW, bool playSignal) {
       lastBuzzerToggle += (unsigned long)PHASE_DURATIONS[phaseIndex];
       phaseIndex++;
     }
-    #ifdef __AVR__
-      if (millis() - lastWdReset > 2000) {
-        wdt_reset();
-        lastWdReset = millis();
-      }
-    #endif
+    if (millis() - lastWdReset > 2000) {
+      watchdogRefresh();
+      lastWdReset = millis();
+    }
   }
 
   digitalWrite(BUZZER_PIN, LOW); // Buzzer sicher aus

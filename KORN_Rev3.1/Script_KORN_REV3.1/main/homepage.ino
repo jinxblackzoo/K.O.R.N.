@@ -31,6 +31,8 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 bool batteryLikelyOK();
 // Hilfsfunktion formatHM() aus main.ino
 void formatHM(char* buf, size_t len, int h, int m);
+// Event-Log-Box aus main.ino (letzte Einträge auf der Startseite)
+void logRenderBox(WiFiClient &client);
 
 // RAM-schonendes Streaming der Header/Footer direkt aus Flash
 static void sendHeader(WiFiClient &client) {
@@ -243,6 +245,8 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<script>"));
   client.print(F("(function(){function pad(n){return (n<10?'0':'')+n;}function fmtHMS(s){var H=Math.floor(s/3600),R=s%3600,M=Math.floor(R/60),S=R%60;return H+':'+pad(M)+':'+pad(S);}var lastUpdate=0;function updateStatus(){var xhr=new XMLHttpRequest();xhr.open('GET','/status',true);xhr.onreadystatechange=function(){if(xhr.readyState===4&&xhr.status===200){try{var data=JSON.parse(xhr.responseText);var lf=document.getElementById('lastfeed');if(lf&&data.lastH>=0&&data.lastM>=0){var src='';switch(data.lastSrc){case 1:src=' [Manuell]';break;case 2:src=' [Web]';break;case 3:src=' [Fütterung 1]';break;case 4:src=' [Fütterung 2]';break;}lf.textContent=pad(data.lastH)+':'+pad(data.lastM)+src;lf.setAttribute('data-h',data.lastH);lf.setAttribute('data-m',data.lastM);lf.setAttribute('data-src',data.lastSrc);}}catch(e){}}};xhr.send();}function init(){var el=document.getElementById('clock');if(!el)return;var h=parseInt(el.getAttribute('data-h'));var m=parseInt(el.getAttribute('data-m'));var s=parseInt(el.getAttribute('data-s'));var hasRtc=!(isNaN(h)||isNaN(m)||isNaN(s)||h<0||m<0||s<0);if(!hasRtc){var t=new Date();h=t.getHours();m=t.getMinutes();s=t.getSeconds();}var base=(h*3600+m*60+s)%86400;var t0=Date.now();function render(){var elapsed=Math.floor((Date.now()-t0)/1000);var nowSec=(base+elapsed)%86400;var H=Math.floor(nowSec/3600),R=nowSec%3600,M=Math.floor(R/60),S=R%60;el.textContent=pad(H)+':'+pad(M)+':'+pad(S);var n1h=parseInt(el.getAttribute('data-n1h')),n1m=parseInt(el.getAttribute('data-n1m'));if(!isNaN(n1h)&&!isNaN(n1m)&&n1h>=0&&n1m>=0){var diff=n1h*3600+n1m*60-nowSec;if(diff<0)diff+=86400;var c1=document.getElementById('c1');if(c1)c1.textContent=fmtHMS(diff);}var n2h=parseInt(el.getAttribute('data-n2h')),n2m=parseInt(el.getAttribute('data-n2m'));if(!isNaN(n2h)&&!isNaN(n2m)&&n2h>=0&&n2m>=0){var diff2=n2h*3600+n2m*60-nowSec;if(diff2<0)diff2+=86400;var c2=document.getElementById('c2');if(c2)c2.textContent=fmtHMS(diff2);}if(elapsed%10===0&&elapsed!==lastUpdate){updateStatus();lastUpdate=elapsed;}}setInterval(render,1000);render();}if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}})();"));
   client.print(F("</script>"));
+  // Event-Log: letzte Eintraege (Fehler + wichtige Ereignisse) direkt anzeigen
+  logRenderBox(client);
   sendFooter(client);
 }
 

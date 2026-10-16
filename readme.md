@@ -12,6 +12,23 @@ Aufgrund der enttäuschenden Erfahrung mit gekauften Fütterungsautomaten welche
 
 Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter) aus einem Silo (KG-Rohr) in einen Auswurfschacht befördert. Das Gehäuse besteht aus überall erhältlichen, robusten und günstigen HT-, bzw KG-Rohren.
 
+## 📊 Revisions-Übersicht
+
+| Version | Board | Zeitquelle | Netzwerk | Bedienung | Wesentliche Änderungen |
+|---|---|---|---|---|---|
+| **Rev2** | Arduino Uno | DS3231 (I2C) | – | keine (Zeiten im Code) | Urversion: 1 Fütterungszeit, Buzzer-Warnung, Relais + Stepper |
+| **Rev2.1** | UNO R4 WiFi | DS3231 (I2C) | – (WiFi ungenutzt) | keine | Port auf R4 WiFi; Fütterungsdatum im flash-EEPROM; Reset per Jumper Pin 12↔13; RTC-Boot-Timeout + Motor-Timeout |
+| **Rev3** | UNO R4 WiFi | DS1302 (D7/D9/D12) | eigener AP „KORN" | Web-UI | Modularer Sketch; Web-UI mit 2 Zeiten, Laufzeit, Sofortfütterung, Blockadelöser; Config in DS1302-RAM + EEPROM-Backup |
+| **Rev3.1** | UNO R4 WiFi | DS3231 (I2C) | eigener AP „KORN" | Web-UI | RTC-Tausch → D7/D9/D12 frei; Config nur EEPROM; Jagdsignal; Stabilitäts-Paket aus 2.1: Nachholfenster, persistenter Fütterungszustand, Watchdog, I2C-Timeout, Event-Log auf der Startseite |
+| **Rev3.5** | UNO R4 WiFi | NTP (Heimnetz) | WLAN-Client; Setup-AP „KORN-Setup" | Web-UI im Heimnetz | RTC entfällt; WLAN-Daten im EEPROM; Event-Log `/log`; Factory Reset; Watchdog; Sommer-/Winterzeit; Rev4-CAD enthalten |
+| **Rev3.6** | UNO R4 WiFi | NTP + Intervall | wie 3.5 + Fallback-AP | wie 3.5 | Notfütterung 8/16 h à 10 s ohne NTP; Fallback-AP bei Heimnetz-Verlust; ⚠️ **unfertig – kompiliert nicht** |
+| **Rev4** | (geplant: Pico W) | – | – | – | Nur CAD: Mechanik-Redesign (Wendel 4.0, Dichtring, Controller-Träger); Software in MicroPython geplant |
+
+**Entwicklungslinien:**
+- **Off-Grid** (eigene RTC + eigenes WLAN): Rev2 → Rev2.1 → Rev3 → **Rev3.1**
+- **Heimnetz** (NTP + WLAN-Client): Rev3.5 → Rev3.6 (unfertig)
+- **Rev4:** Mechanik-Redesign mit neuem Controller (geplant)
+
 ## Revision 1 wurde verworfen
 
 ## Revision 2 enthält die neuen CAD-Dateien und eine Steuerung mit ARDUINO Uno R3
@@ -28,7 +45,14 @@ Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellunge
 
 Revision 3.1 ist funktional identisch mit Rev.3 (Off-Grid Access Point), verwendet jedoch die **DS3231 RTC** (I2C, SDA=A4, SCL=A5) anstelle der DS1302. Da die DS3231 kein nutzbares RAM besitzt, wird die Konfiguration ausschließlich im EEPROM des Arduino gespeichert. Als Bibliothek kommt **RTClib by Adafruit** statt "Rtc by Makuna" zum Einsatz.
 
-📖 **Detaillierte Dokumentation:** [`KORN_Rev3.1/README.md`](./KORN_Rev3.1/README.md)
+**Stabilitäts-Paket** (übernommen aus der 3 Monate lang bewährten Rev2.1):
+- **Nachhol-Fenster**: Verpasste Fütterung (Strom-/Solar-Ausfall zur Zielzeit) wird bis zu 60 min nachgeholt
+- **Persistenter Fütterungszustand** im EEPROM → keine Doppelfütterung nach Reboot
+- **Hardware-Watchdog** (4 s, WDT.h auf UNO R4) mit Refresh in Loop + Motorlauf
+- **I2C-Timeout** (3 s) + erweiterte RTC-Plausibilitätsprüfung (alle Datumsfelder) + Build-Zeit-Sanity
+- **Event-Log**: letzte 10 Fehler/Ereignisse direkt auf der Web-Startseite
+
+📖 **Detaillierte Dokumentation:** [`KORN_Rev3.1/readme_rev3.1.md`](./KORN_Rev3.1/readme_rev3.1.md)
 
 ## Revision 3.5 basiert auf Rev.3 (Arduino UNO R4 WiFi) mit neuer WLAN-Logik ✅ Fertig
 
@@ -58,7 +82,7 @@ Statt eines eigenen Access Points verbindet sich KORN nun mit einem vorhandenen 
 
 **Ablauf:** Beim ersten Start oder bei fehlendem WLAN öffnet der Arduino einen temporären Einrichtungs-AP. Nach Speichern der Zugangsdaten verbindet sich KORN automatisch mit dem Heimnetz.
 
-📖 **Detaillierte Dokumentation:** [`KORN_Rev3.5/README.md`](./KORN_Rev3.5/README.md)
+📖 **Detaillierte Dokumentation:** [`KORN_Rev3.5/readme_rev3.5.md`](./KORN_Rev3.5/readme_rev3.5.md)
 
 ## Revision 4 basiert auf Rev.3/3.5 CAD mit neuem Controller: Raspberry Pi Pico W (Geplant)
 
