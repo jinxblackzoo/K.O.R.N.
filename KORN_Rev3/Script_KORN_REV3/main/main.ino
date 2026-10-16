@@ -112,8 +112,11 @@ int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
-// Batterie-Indikator (softwarebasiert): RTC-Zeit gültig und Config aus RTC-RAM
-bool batteryLikelyOK();
+// Batterie-Alters-Tracker: Einbaudatum der CR2032 im EEPROM.
+// Eine Spannungsmessung ist ohne Zusatzhardware nicht moeglich; stattdessen
+// wird das Alter seit dem letzten Tausch angezeigt (Tausch-Empfehlung: 24 Monate).
+int battAgeMonths();          // Monate seit Einbau, -1 = Datum unbekannt
+void battMarkReplacedNow();   // Einbaudatum auf heute setzen (Web-Button)
 
 // ============================================================================
 // Serielle Minimal-Ausgabe
@@ -172,11 +175,55 @@ static bool gCfgFromEeprom = false; // Herkunft: true=aus EEPROM geladen, false=
 // EEPROM-Speicheradresse für Konfiguration
 #define EEPROM_CFG_ADDR 0
 
-bool batteryLikelyOK() {
-  // Heuristik: Backup-Batterie ist wahrscheinlich ok, wenn
-  // 1) RTC eine gültige Zeit meldet und
-  // 2) die Konfiguration erfolgreich aus dem DS1302-RAM gelesen wurde
-  return Rtc.IsDateTimeValid() && gCfgFromRam;
+// =========================================================================
+// Batterie-Alters-Tracker: Einbaudatum der CR2032 persistent im EEPROM.
+// Die alte Heuristik (RTC-Zeit + RTC-RAM-Config als "Batterie defekt") war
+// irrefuehrend: eine gepufferte Zeit sagt nichts ueber den Ladezustand aus.
+// =========================================================================
+#define BATT_MAGIC 0x4232  // 'B2'
+struct BattInfo {
+  uint16_t magic;
+  uint16_t year;   // Einbaudatum
+  uint8_t  month;
+  uint8_t  day;
+  uint16_t crc;
+};
+#define EEPROM_BATT_ADDR 64  // hinter Config-Backup (Adresse 0, ~16 Bytes)
+
+static uint16_t battChecksum(const BattInfo &b) {
+  uint32_t s = b.year + b.month + b.day;
+  return (uint16_t)((s & 0xFFFFu) ^ 0x3C3Cu);
+}
+
+static bool battLoad(BattInfo &b) {
+  EEPROM.get(EEPROM_BATT_ADDR, b);
+  if (b.magic != BATT_MAGIC || b.crc != battChecksum(b)) return false;
+  if (b.year < 2024 || b.year > 2099 || b.month < 1 || b.month > 12 || b.day < 1 || b.day > 31) return false;
+  return true;
+}
+
+void battMarkReplacedNow() {
+  if (!Rtc.IsDateTimeValid()) return; // ohne gueltige Zeit kein sinnvolles Datum
+  RtcDateTime now = Rtc.GetDateTime();
+  BattInfo b;
+  b.magic = BATT_MAGIC;
+  b.year = now.Year();
+  b.month = now.Month();
+  b.day = now.Day();
+  b.crc = battChecksum(b);
+  EEPROM.put(EEPROM_BATT_ADDR, b);
+  Serial.println(F("CR2032-Tausch vermerkt"));
+}
+
+int battAgeMonths() {
+  BattInfo b;
+  if (!battLoad(b)) return -1;
+  if (!Rtc.IsDateTimeValid()) return -1;
+  RtcDateTime now = Rtc.GetDateTime();
+  int months = ((int)now.Year() - (int)b.year) * 12 + ((int)now.Month() - (int)b.month);
+  if (now.Day() < b.day) months--; // angebrochener Monat zaehlt nicht
+  if (months < 0) return -1;       // Einbaudatum in der Zukunft -> ungueltig
+  return months;
 }
 
 static uint16_t cfgChecksum(const KConfig &c) {

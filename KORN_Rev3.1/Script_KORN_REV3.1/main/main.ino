@@ -117,8 +117,11 @@ int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
-// Batterie-Indikator (softwarebasiert): RTC-Zeit gültig
-bool batteryLikelyOK();
+// Batterie-Alters-Tracker: Einbaudatum der CR2032 im EEPROM.
+// Eine Spannungsmessung ist ohne Zusatzhardware nicht moeglich; stattdessen
+// wird das Alter seit dem letzten Tausch angezeigt (Tausch-Empfehlung: 24 Monate).
+int battAgeMonths();          // Monate seit Einbau, -1 = Datum unbekannt
+void battMarkReplacedNow();   // Einbaudatum auf heute setzen (Web-Button)
 
 // Watchdog-Refresh: in loop() und aus motor.ino während Motorlauf aufgerufen
 void watchdogRefresh();
@@ -274,9 +277,56 @@ static uint8_t daysInMonth(uint16_t year, uint8_t month) {
   return days[month - 1];
 }
 
-bool batteryLikelyOK() {
-  // Heuristik: RTC erreichbar, Zeit gültig und beim Start kein Stromverlust erkannt
-  return rtcIsValid() && !gRtcPowerLossDetected;
+// =========================================================================
+// Batterie-Alters-Tracker: Einbaudatum der CR2032 persistent im EEPROM.
+// Die alte Heuristik (lostPower-Flag als "Batterie defekt") war irrefuehrend:
+// das OSF-Flag sagt nur, dass der Oszillator mal stand - nicht warum.
+// Stromverlust-Ereignisse landen weiterhin im Event-Log.
+// =========================================================================
+#define BATT_MAGIC 0x4232  // 'B2'
+struct BattInfo {
+  uint16_t magic;
+  uint16_t year;   // Einbaudatum
+  uint8_t  month;
+  uint8_t  day;
+  uint16_t crc;
+};
+#define EEPROM_BATT_ADDR 64  // hinter FeedState (Adresse 32, ~16 Bytes)
+
+static uint16_t battChecksum(const BattInfo &b) {
+  uint32_t s = b.year + b.month + b.day;
+  return (uint16_t)((s & 0xFFFFu) ^ 0x3C3Cu);
+}
+
+static bool battLoad(BattInfo &b) {
+  EEPROM.get(EEPROM_BATT_ADDR, b);
+  if (b.magic != BATT_MAGIC || b.crc != battChecksum(b)) return false;
+  if (b.year < 2024 || b.year > 2099 || b.month < 1 || b.month > 12 || b.day < 1 || b.day > 31) return false;
+  return true;
+}
+
+void battMarkReplacedNow() {
+  if (!rtcIsValid()) return; // ohne gueltige Zeit kein sinnvolles Datum
+  DateTime now = rtc.now();
+  BattInfo b;
+  b.magic = BATT_MAGIC;
+  b.year = now.year();
+  b.month = now.month();
+  b.day = now.day();
+  b.crc = battChecksum(b);
+  EEPROM.put(EEPROM_BATT_ADDR, b);
+  logEvent("CR2032-Tausch vermerkt");
+}
+
+int battAgeMonths() {
+  BattInfo b;
+  if (!battLoad(b)) return -1;
+  if (!rtcIsValid()) return -1;
+  DateTime now = rtc.now();
+  int months = ((int)now.year() - (int)b.year) * 12 + ((int)now.month() - (int)b.month);
+  if (now.day() < b.day) months--; // angebrochener Monat zaehlt nicht
+  if (months < 0) return -1;       // Einbaudatum in der Zukunft -> ungueltig
+  return months;
 }
 
 static uint16_t cfgChecksum(const KConfig &c) {

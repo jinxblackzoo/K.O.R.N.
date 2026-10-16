@@ -153,8 +153,6 @@ int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
-// Batterie-Indikator (softwarebasiert): RTC-Zeit gültig und Config aus RTC-RAM
-bool batteryLikelyOK();
 
 // ============================================================================
 // Serielle Minimal-Ausgabe

@@ -31,8 +31,9 @@ int cfgGetM2();
 bool cfgGetActive2();
 int cfgGetSteps();
 void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool active2, uint32_t steps);
-// Batterie-Indikator aus main.ino (softwarebasierte Heuristik)
-bool batteryLikelyOK();
+// Batterie-Alters-Tracker aus main.ino (Einbaudatum im EEPROM)
+int battAgeMonths();
+void battMarkReplacedNow();
 // Hilfsfunktion formatHM() aus main.ino
 void formatHM(char* buf, size_t len, int h, int m);
 
@@ -234,12 +235,24 @@ static void handleRoot(WiFiClient &client) {
     "f.H.value=t.getHours();f.M.value=t.getMinutes();f.S.value=t.getSeconds();f.submit();})()\">KORN-Zeit Update</button>"
     "</form>"
   ));
-  // Batterie-Indikator (deaktivierter Button, nur Anzeige)
+  // CR2032-Alters-Anzeige (ehrlich: keine Spannungsmessung moeglich,
+  // stattdessen Monate seit Einbau; Tausch-Empfehlung alle 24 Monate)
   client.print(F("<div style=\"margin-top:6px\">"));
-  if (batteryLikelyOK()) {
-    client.print(F("<button type=\"button\" disabled style=\"background:#2e7d32;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.9;cursor:default\">Batterie OK</button>"));
-  } else {
-    client.print(F("<button type=\"button\" disabled style=\"background:#c62828;color:#fff;border:none;padding:6px 10px;border-radius:4px;opacity:0.95;cursor:default\">Bitte CR2032 tauschen</button>"));
+  {
+    int ageM = battAgeMonths();
+    if (ageM < 0) {
+      client.print(F("<span style=\"background:#f9a825;color:#000;padding:6px 10px;border-radius:4px;display:inline-block\">CR2032: Einbaudatum unbekannt</span>"));
+    } else if (ageM >= 24) {
+      client.print(F("<span style=\"background:#c62828;color:#fff;padding:6px 10px;border-radius:4px;display:inline-block\">CR2032 seit "));
+      client.print(ageM);
+      client.print(F(" Monaten verbaut &ndash; bitte tauschen</span>"));
+    } else {
+      client.print(F("<span style=\"background:#2e7d32;color:#fff;padding:6px 10px;border-radius:4px;display:inline-block\">CR2032 seit "));
+      client.print(ageM);
+      client.print(F(" Monaten verbaut (Tausch ab 24)</span>"));
+    }
+    client.print(F("<form method=\"POST\" action=\"/battswap\" style=\"display:inline;margin-left:8px\" onsubmit=\"return confirm('Einbaudatum der CR2032 auf heute setzen?')\">"));
+    client.print(F("<button type=\"submit\" style=\"padding:6px 10px\">Batterie heute getauscht</button></form>"));
   }
   client.print(F("</div>"));
   // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns (#c1, #c2) sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
@@ -415,6 +428,11 @@ void webHandleClient() {
     // Ausführen (blockierend, wie feed), nutzt Relais/Buzzer aus motorFeed
     motorFeed(steps, dirCW);
     // Redirect zurück
+    client.print(F("HTTP/1.1 303 See Other\r\n"));
+    client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
+  } else if (reqLine.startsWith("POST /battswap")) {
+    // Einbaudatum der CR2032 auf heute setzen (Web-Button)
+    battMarkReplacedNow();
     client.print(F("HTTP/1.1 303 See Other\r\n"));
     client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
   } else if (reqLine.startsWith("GET /status")) {

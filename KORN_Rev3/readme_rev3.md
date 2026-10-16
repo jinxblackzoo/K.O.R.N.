@@ -119,7 +119,7 @@ Relay:
   - Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
   - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
   - Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
-  - Batteriestatus (CR2032) als Anzeige-Button: Grün=OK, Rot=Bitte CR2032 tauschen (Heuristik: RTC-Zeit + RTC-RAM)
+  - CR2032-Alters-Anzeige: zeigt Monate seit dem letzten Batterietausch (Grün <24 Monate, Rot ab 24 = Tausch-Empfehlung, Gelb = Einbaudatum unbekannt). Button „Batterie heute getauscht" setzt das Einbaudatum neu (im EEPROM gespeichert). Hinweis: Eine echte Spannungsmessung ist ohne Zusatzhardware nicht möglich — die Anzeige basiert bewusst nur auf dem Alter
 * ✅ Manuelle Bedienung:
   - ✅ Kurzschluss Pin 10 ↔ 11 als Taster
   - ✅ Sofortige Fütterung unabhängig vom Zeitplan
@@ -167,7 +167,8 @@ Hinweise:
 
 * Konfiguration wird im batteriegepufferten RAM der **DS1302** gespeichert und übersteht Stromausfälle bei intakter **CR2032**.
 * Ist die Batterie leer/fehlend oder werden Daten korrupt, lädt das Gerät **Werkseinstellungen** (Defaults).
-* Heuristischer Batterietest: Batterie gilt als „OK“, wenn die **RTC-Zeit gültig** ist und die **Konfiguration aus RTC‑RAM** geladen wurde. Die Web‑UI zeigt einen Anzeige‑Button (Grün/Rot).
+* **CR2032-Alters-Tracker**: Das Einbaudatum der Pufferbatterie wird im EEPROM gespeichert (Web-Button „Batterie heute getauscht"). Die Web-UI zeigt das Alter in Monaten; ab 24 Monaten wird der Tausch empfohlen. Eine CR2032 hält im DS1302 typischerweise 2–5 Jahre — der 24-Monats-Rhythmus ist eine konservative Empfehlung für den Feldeinsatz.
+* Indirekter Batterie-Hinweis: Wird die Konfiguration nach Stromausfall **nicht** aus dem RTC-RAM geladen (Status `CFG:DEF`/`EEPROM`), war das batteriegepufferte RAM leer — ein Zeichen für leere Batterie oder Kontaktproblem.
 * Indikatoren in der seriellen Ausgabe: `RTC: OK/--`, `CFG: RAM/DEF`.
 
 ---
@@ -186,7 +187,7 @@ Der serielle Monitor ist hauptsächlich für Entwickler und Fehlersuche gedacht.
 • **Aktuelle Uhrzeit**: Datum und Uhrzeit der internen Uhr
 • **Letzte Fütterung**: Wann zuletzt gefüttert wurde und wie lange der Motor lief
 • **Nächste Fütterung**: Countdown bis zur nächsten automatischen Fütterung
-• **Batteriestatus**: Ob die CR2032-Batterie der Uhr noch funktioniert
+• **RTC-Status**: Ob die DS1302-Uhr eine gültige Zeit liefert
 • **Betriebszeit**: Wie lange das Gerät bereits läuft
 
 **Beispiel einer Statuszeile:**
@@ -199,7 +200,7 @@ AP:KORN Pw:Chaosfeeder IP:192.168.4.1 | 2025-08-17 18:48 | Last:17:10 | Next1:19
 - Aktuelle Zeit: 18:48 Uhr am 17. August 2025
 - Letzte Fütterung: um 17:10 Uhr
 - Nächste Fütterung: um 19:00 Uhr (in 12 Minuten)
-- Batterie der Uhr: OK
+- Uhr (RTC) erreichbar und Zeit gültig
 - Gerät läuft seit 32 Minuten
 
 ---
@@ -244,8 +245,9 @@ Die Bauteile der Förderschnecke wurden mittels FreeCAD (LGPL2+, CC-BY-3.0) entw
   - Grünes Lämpchen am Arduino leuchtet?
 
 #### Batterie-Probleme
-* **Rote Batterie-Anzeige**: CR2032 in der Uhr tauschen
-* **Einstellungen gehen verloren**: Neue CR2032 einsetzen, dann neu konfigurieren
+* **Rote Alters-Anzeige (≥24 Monate)**: CR2032 tauschen und danach den Button „Batterie heute getauscht" drücken
+* **Gelbe Anzeige (Einbaudatum unbekannt)**: Beim nächsten Batterietausch den Button „Batterie heute getauscht" drücken
+* **Einstellungen gehen verloren / CFG:DEF nach Stromausfall**: Das batteriegepufferte RTC-RAM war leer → CR2032 leer oder Kontaktproblem; Batterie tauschen und neu konfigurieren
 
 ### Notfall-Fütterung (Hardware-Taster)
 Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit einem Draht verbinden → Sofortige Fütterung wird ausgelöst (umgeht 2-Minuten-Regel).

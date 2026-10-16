@@ -108,7 +108,7 @@ Relay:
 ### 💾 Konfigurationsspeicherung & Datensicherheit
 * **EEPROM-Speicher**: Konfiguration wird im Arduino-EEPROM gespeichert
 * **Fütterungszustand persistent**: Letzte Fütterung, „heute-gefüttert"-Marker und Datum liegen zusätzlich als geprüfter Datensatz (Magic + CRC) im EEPROM – nach Stromausfall/Reboot weiss das Gerät, ob bereits gefüttert wurde
-* **Batterie-Ausfallschutz**: Bei CR2032-Ausfall wird Config aus EEPROM wiederhergestellt
+* **Batterie-unabhängige Konfiguration**: Konfiguration und Fütterungszustand liegen im EEPROM — eine leere CR2032 betrifft nur die RTC-Zeit, nicht die gespeicherten Einstellungen
 * **Status-Anzeige**: 
   - **CFG:EEPROM** = Aus EEPROM geladen (normal)
   - **CFG:DEF** = Standard-Werte (erster Start)
@@ -139,7 +139,7 @@ Relay:
   - Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
   - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
   - Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
-  - Batteriestatus (CR2032) als Anzeige-Button: Grün=OK, Rot=Bitte CR2032 tauschen (Heuristik: RTC-Zeit gültig)
+  - CR2032-Alters-Anzeige: zeigt Monate seit dem letzten Batterietausch (Grün <24 Monate, Rot ab 24 = Tausch-Empfehlung, Gelb = Einbaudatum unbekannt). Button „Batterie heute getauscht" setzt das Einbaudatum neu (im EEPROM gespeichert). Hinweis: Eine echte Spannungsmessung ist ohne Zusatzhardware nicht möglich — die Anzeige basiert bewusst nur auf dem Alter
   - **Event-Log-Box**: Die letzten 10 Einträge (Fehler + Ereignisse wie Boot, Tageswechsel, Motor-Timeout, RTC-Probleme, nachgeholte Fütterungen) mit Zeitstempel direkt auf der Startseite – Fehlersuche ohne seriellen Monitor
 * ✅ Manuelle Bedienung:
   - ✅ Kurzschluss Pin 10 ↔ 11 als Taster
@@ -189,7 +189,8 @@ Hinweise:
 
 * Konfiguration wird im **EEPROM des Arduino** gespeichert und übersteht Stromausfälle (die DS3231 besitzt kein nutzbares RAM).
 * Sind die EEPROM-Daten korrupt oder nicht vorhanden, lädt das Gerät **Werkseinstellungen** (Defaults).
-* Heuristischer Batterietest: Batterie gilt als „OK“, wenn die **RTC-Zeit gültig** ist. Die Web‑UI zeigt einen Anzeige‑Button (Grün/Rot).
+* **CR2032-Alters-Tracker**: Das Einbaudatum der Pufferbatterie wird im EEPROM gespeichert (Web-Button „Batterie heute getauscht"). Die Web-UI zeigt das Alter in Monaten; ab 24 Monaten wird der Tausch empfohlen. Eine CR2032 hält im DS3231 typischerweise 2–5 Jahre (theoretisch ~8 Jahre bei ~3 µA) — der 24-Monats-Rhythmus ist eine konservative Empfehlung für den Feldeinsatz.
+* RTC-Stromverlust-Ereignisse (`lostPower()`) werden im Event-Log auf der Startseite angezeigt — ein Hinweis darauf, dass die Batterie einen stromlosen Zeitraum nicht überbrückt hat (Batterie schwach oder Kontaktproblem).
 * Indikatoren in der seriellen Ausgabe: `RTC: OK/--`, `CFG: EEPROM/DEF`.
 
 ---
@@ -208,7 +209,7 @@ Der serielle Monitor ist hauptsächlich für Entwickler und Fehlersuche gedacht.
 • **Aktuelle Uhrzeit**: Datum und Uhrzeit der internen Uhr
 • **Letzte Fütterung**: Wann zuletzt gefüttert wurde und wie lange der Motor lief
 • **Nächste Fütterung**: Countdown bis zur nächsten automatischen Fütterung
-• **Batteriestatus**: Ob die CR2032-Batterie der Uhr noch funktioniert
+• **RTC-Status**: Ob die DS3231-Uhr erreichbar ist und eine gültige Zeit liefert (`RTC:OK`)
 • **Betriebszeit**: Wie lange das Gerät bereits läuft
 
 **Beispiel einer Statuszeile:**
@@ -221,7 +222,7 @@ AP:KORN Pw:Chaosfeeder IP:192.168.4.1 | 2025-08-17 18:48 | Last:17:10 | Next1:19
 - Aktuelle Zeit: 18:48 Uhr am 17. August 2025
 - Letzte Fütterung: um 17:10 Uhr
 - Nächste Fütterung: um 19:00 Uhr (in 12 Minuten)
-- Batterie der Uhr: OK
+- Uhr (RTC) erreichbar und Zeit gültig
 - Gerät läuft seit 32 Minuten
 
 ---
@@ -266,8 +267,11 @@ Die Bauteile der Förderschnecke wurden mittels FreeCAD (LGPL2+, CC-BY-3.0) entw
   - Grünes Lämpchen am Arduino leuchtet?
 
 #### Batterie-Probleme
-* **Rote Batterie-Anzeige**: CR2032 in der Uhr tauschen
-* **Einstellungen gehen verloren**: Neue CR2032 einsetzen, dann neu konfigurieren
+* **Rote Alters-Anzeige (≥24 Monate)**: CR2032 tauschen und danach den Button „Batterie heute getauscht" drücken
+* **Gelbe Anzeige (Einbaudatum unbekannt)**: Beim nächsten Batterietausch (oder jetzt, wenn das Einbaudatum bekannt ist) den Button „Batterie heute getauscht" drücken
+* **Log-Eintrag „RTC Stromverlust"**: Die Uhr ist während eines Stromausfalls stehen geblieben → Batterie leer oder Kontaktproblem. Test: Gerät 5 Minuten komplett stromlos machen; zeigt die Uhr danach die falsche Zeit, Batterie tauschen
+* **Einstellungen gehen verloren**: Die Konfiguration liegt im EEPROM und ist batterieunabhängig; bei Verlust EEPROM-Fehler prüfen (Event-Log)
+* ⚠️ Stirbt die CR2032 auffällig schnell (Wochen/Monate), hat das DS3231-Modul vermutlich eine aktive Ladeschaltung → Diode auslöten oder LIR2032 verwenden (siehe Verdrahtungshinweise)
 
 ### Notfall-Fütterung (Hardware-Taster)
 Falls die Webseite nicht funktioniert: Pin 10 und Pin 11 am Arduino kurz mit einem Draht verbinden → Sofortige Fütterung wird ausgelöst (umgeht 2-Minuten-Regel).
