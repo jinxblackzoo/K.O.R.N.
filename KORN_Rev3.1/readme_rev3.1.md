@@ -105,7 +105,8 @@ Relay:
 * **Erweiterte Laufzeit**: 1–600 Sekunden (10 Minuten) für unterschiedliche Futtermengen
 * **Live-Updates**: Webseite zeigt aktuelle Uhrzeit und letzte Fütterung in Echtzeit
 * **Nachhol-Fenster** (aus Rev2.1): War das Gerät zur Zielzeit aus (z. B. Strom-/Solar-Ausfall), wird innerhalb von **60 Minuten** nach der Zielzeit einmalig nachgefüttert. Der Zustand „heute schon gefüttert" liegt persistent im EEPROM und verhindert Doppelfütterung nach Reboot.
-* **Tagesmarker sichtbar & rücksetzbar**: Die Startseite zeigt `Heute gefüttert: 1:ja/nein 2:ja/nein`. Ein bereits gesetzter Marker unterdrückt weitere Auslösungen desselben Termins am selben Tag — **auch nach Zeitumstellung** (Marker überleben Reboots und Reflashes). Ein unterdrückter Termin landet als Eintrag im Event-Log („SCHEDx unterdrueckt: heute gefuettert"). Für Tests/Zeitumstellungen gibt es den Button **„Tagesmarker zurücksetzen (Test)"** (`POST /feedreset`) — er entspricht dem EEPROM-Reset-Jumper aus Rev2.1.
+* **Tagesmarker sichtbar**: Die Startseite zeigt `Heute gefüttert: 1:ja/nein 2:ja/nein`. Ein bereits gesetzter Marker unterdrückt weitere Auslösungen desselben Termins am selben Tag — **auch nach Zeitumstellung** (Marker überleben Reboots und Reflashes). Ein unterdrückter Termin landet als Eintrag im Event-Log („SCHEDx unterdrueckt: heute gefuettert").
+* **Werksreset** (Button unten auf der Startseite, `POST /factoryreset`): Setzt das komplette System auf Anfang — Konfiguration → Werkseinstellungen (7:01 / 16:01, 5 s Laufzeit), Fütterungszustand und Batterie-Einbaudatum werden gelöscht. Damit der Reset nicht sofort eine Fütterung auslöst, bleibt das Nachhol-Fenster **am Reset-Tag gesperrt** (persistenter `suppressDay`-Marker im EEPROM, ab Mitternacht automatisch wieder aktiv). Geplante Zeiten, die noch in der Zukunft liegen, laufen normal.
 
 ### 💾 Konfigurationsspeicherung & Datensicherheit
 * **EEPROM-Speicher**: Konfiguration wird im Arduino-EEPROM gespeichert

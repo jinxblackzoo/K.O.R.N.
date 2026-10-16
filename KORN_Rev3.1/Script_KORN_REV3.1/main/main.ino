@@ -124,10 +124,10 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 int battAgeMonths();          // Monate seit Einbau, -1 = Datum unbekannt
 void battMarkReplacedNow();   // Einbaudatum auf heute setzen (Web-Button)
 
-// Tagesmarker-Status fuer die Web-UI und Test-Reset
+// Tagesmarker-Status fuer die Web-UI und Werksreset
 bool fed1Done();
 bool fed2Done();
-void feedMarkersReset();      // fedToday1/2 + pending zuruecksetzen (Test/Zeitumstellung)
+void factoryReset();          // kompletter Reset: Config, Fuetterungszustand, Batteriedatum
 
 // Watchdog-Refresh: in loop() und aus motor.ino während Motorlauf aufgerufen
 void watchdogRefresh();
@@ -158,6 +158,10 @@ static bool manualConsumed = false;               // einmalige Auslösung pro Ta
 // Pending-Flags für geplante Fütterungen, falls sie während einer laufenden Fütterung fällig werden
 static bool pendingSched1 = false;
 static bool pendingSched2 = false;
+// Nach Werksreset: Nachhol-Fenster fuer den Reset-Tag sperren (persistent).
+// Sonst feuert ein Reset innerhalb von 60min nach einer Zielzeit sofort eine
+// Fuetterung - der Reset ist vom Stromausfall-Szenario sonst nicht unterscheidbar.
+static uint8_t gSuppressDay = 0; // 0 = nicht gesperrt, sonst Tag des Monats
 // Bootzeit (kann optional genutzt werden, z.B. für Arming-Delays)
 static unsigned long bootMs = 0;
 // Web: asynchrones Feed-Request-Flag (verhindert blockierende HTTP-Antworten)
@@ -424,6 +428,7 @@ struct FeedState {
   uint8_t  fedToday2;     // 0/1
   uint8_t  day;           // Tag+Monat zur Tagesidentifikation
   uint8_t  month;
+  uint8_t  suppressDay;   // Nachhol-Sperre nach Werksreset (0 = keine)
   uint16_t crc;
 };
 
@@ -434,7 +439,7 @@ static uint16_t feedStateChecksum(const FeedState &fs) {
   s += (uint8_t)fs.lastH + (uint8_t)fs.lastM + (uint8_t)fs.lastS;
   s += fs.lastSteps & 0xFF; s += (fs.lastSteps >> 8) & 0xFF;
   s += (fs.lastSteps >> 16) & 0xFF; s += (fs.lastSteps >> 24) & 0xFF;
-  s += fs.lastSrc + fs.fedToday1 + fs.fedToday2 + fs.day + fs.month;
+  s += fs.lastSrc + fs.fedToday1 + fs.fedToday2 + fs.day + fs.month + fs.suppressDay;
   return (uint16_t)((s & 0xFFFFu) ^ 0x5A5Au);
 }
 
@@ -451,6 +456,7 @@ static void feedStateSave() {
   fs.fedToday2 = fedToday2 ? 1 : 0;
   fs.day = lastKnownDay;
   fs.month = lastKnownMonth;
+  fs.suppressDay = gSuppressDay;
   fs.crc = feedStateChecksum(fs);
   EEPROM.put(EEPROM_FEEDSTATE_ADDR, fs);
 }
@@ -474,6 +480,7 @@ static void feedStateLoad() {
   fedToday2 = (fs.fedToday2 != 0);
   lastKnownDay = fs.day;
   lastKnownMonth = fs.month;
+  gSuppressDay = fs.suppressDay;
   Serial.print(F("FeedState geladen: last="));
   Serial.print(lastFeedHour); Serial.print(':');
   Serial.print(lastFeedMinute);
@@ -853,6 +860,7 @@ void setup() {
     if (lastKnownDay != now.day() || lastKnownMonth != now.month()) {
       fedToday1 = false;
       fedToday2 = false;
+      gSuppressDay = 0; // Nachhol-Sperre gilt nur am Reset-Tag
       lastKnownDay = now.day();
       lastKnownMonth = now.month();
       feedStateSave();
@@ -976,6 +984,7 @@ void loop() {
       fedToday2 = false;
       pendingSched1 = false;
       pendingSched2 = false;
+      gSuppressDay = 0; // Nachhol-Sperre gilt nur am Reset-Tag
       lastNowSec = nowSec;
       lastNowMs = nowMs;
       logEvent("Tageswechsel: fed-Marker reset");
@@ -1172,7 +1181,10 @@ void loop() {
       // gesehen. Innerhalb von CATCHUP_WINDOW_MIN nach der Zielzeit wird dann
       // einmalig nachgefuettert. fedToday1/2 sind persistent (EEPROM) und
       // verhindern Doppelfuetterung ueber Reboots hinweg.
-      if (!didTrigger && !fedToday1 && !pendingSched1) {
+      // Ausnahme: Nach einem Werksreset ist das Nachholen am selben Tag
+      // gesperrt (gSuppressDay) - ein Reset darf keine Sofort-Fuetterung ausloesen.
+      bool catchupSuppressed = (gSuppressDay != 0) && (!rtcOk || gSuppressDay == nowRtc.day());
+      if (!didTrigger && !fedToday1 && !pendingSched1 && !catchupSuppressed) {
         int dt1 = nowSec - t1Sec; // >0: Zielzeit heute bereits vorbei
         if (dt1 > 0 && dt1 <= (int)CATCHUP_WINDOW_MIN * 60) {
           if (deltaLastSec >= (int)MIN_GAP_MIN * 60) {
@@ -1185,7 +1197,7 @@ void loop() {
           }
         }
       }
-      if (!didTrigger && gCfg.active2 && !fedToday2 && !pendingSched2) {
+      if (!didTrigger && gCfg.active2 && !fedToday2 && !pendingSched2 && !catchupSuppressed) {
         int dt2 = nowSec - t2Sec;
         if (dt2 > 0 && dt2 <= (int)CATCHUP_WINDOW_MIN * 60) {
           int dSec = 999999;
@@ -1219,19 +1231,37 @@ void loop() {
 }
 
 // ============================================================================
-// Tagesmarker: Getter fuer Web-UI + manueller Reset (z. B. nach Zeitumstellung
-// oder fuer Testlaeufe; in Rev2.1 war das der EEPROM-Reset-Jumper 12<->13)
+// Tagesmarker: Getter fuer Web-UI + Werksreset.
+// Der Werksreset setzt das komplette System auf Anfang (wie frisch geflasht):
+// Config -> Defaults, Fuetterungszustand geloescht, Batterie-Datum geloescht.
+// Zusaetzlich wird das Nachhol-Fenster fuer den Rest des Tages gesperrt
+// (gSuppressDay), damit der Reset nicht sofort eine Fuetterung ausloest.
 // ============================================================================
 bool fed1Done() { return fedToday1; }
 bool fed2Done() { return fedToday2; }
 
-void feedMarkersReset() {
+void factoryReset() {
+  // Konfiguration auf Werkseinstellungen (Zeiten 7:01/16:01, Laufzeit 5s)
+  cfgApplyDefaults();
+  cfgSaveToEeprom();
+  // Fuetterungszustand komplett loeschen
+  lastFeedHour = lastFeedMinute = lastFeedSecond = -1;
+  lastFeedSteps = -1;
+  lastFeedSrc = SRC_NONE;
+  nextFeedSrc = SRC_NONE;
   fedToday1 = false;
   fedToday2 = false;
   pendingSched1 = false;
   pendingSched2 = false;
+  // Nachhol-Fenster fuer heute sperren - sonst fuehrt der Reset innerhalb von
+  // 60min nach einer Zielzeit zu einer Sofort-Fuetterung (sieht aus wie ein
+  // "verpasster Termin", war aber eine manuelle Aktion)
+  gSuppressDay = (lastKnownDay != 0) ? lastKnownDay : 255; // 255 = ohne RTC dauerhaft sperren
   feedStateSave();
-  logEvent("Tagesmarker zurueckgesetzt");
+  // Batterie-Einbaudatum loeschen (Magic ungueltig -> "Datum unbekannt")
+  BattInfo b = {};
+  EEPROM.put(EEPROM_BATT_ADDR, b);
+  logEvent("WERKSRESET ausgefuehrt");
 }
 
 // ============================================================================

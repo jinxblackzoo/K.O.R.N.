@@ -30,10 +30,10 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 // Batterie-Alters-Tracker aus main.ino (Einbaudatum im EEPROM)
 int battAgeMonths();
 void battMarkReplacedNow();
-// Tagesmarker aus main.ino (Status + Reset fuer Tests/Zeitumstellung)
+// Tagesmarker aus main.ino (Status) und Werksreset
 bool fed1Done();
 bool fed2Done();
-void feedMarkersReset();
+void factoryReset();
 // Hilfsfunktion formatHM() aus main.ino
 void formatHM(char* buf, size_t len, int h, int m);
 // Event-Log-Box aus main.ino (letzte Einträge auf der Startseite)
@@ -260,10 +260,12 @@ static void handleRoot(WiFiClient &client) {
     client.print(F("<button type=\"submit\" style=\"padding:6px 10px\">Batterie heute getauscht</button></form>"));
   }
   client.print(F("</div>"));
-  // Test-Helfer: Tagesmarker zuruecksetzen (in Rev2.1 der EEPROM-Reset-Jumper 12-13)
-  client.print(F("<div style=\"margin-top:6px\">"));
-  client.print(F("<form method=\"POST\" action=\"/feedreset\" style=\"display:inline\" onsubmit=\"return confirm('Heute-gefuettert-Marker wirklich zuruecksetzen? Beide Fuetterungen duerfen danach heute nochmal laufen.')\">"));
-  client.print(F("<button type=\"submit\" style=\"padding:6px 10px\">Tagesmarker zur&uuml;cksetzen (Test)</button></form>"));
+  // Werksreset: komplettes System auf Anfang (Config, Fuetterungszustand,
+  // Batteriedatum). Nachhol-Fenster bleibt bis Mitternacht gesperrt, damit der
+  // Reset keine Sofort-Fuetterung ausloest.
+  client.print(F("<div style=\"margin-top:6px;padding:8px;border:1px solid #c62828;border-radius:4px\">"));
+  client.print(F("<form method=\"POST\" action=\"/factoryreset\" style=\"display:inline\" onsubmit=\"return confirm('WERKSRESET: Zeiten, Fuetterungszustand und Batteriedatum werden auf Werkseinstellungen zurueckgesetzt. Fortfahren?')\">"));
+  client.print(F("<button type=\"submit\" style=\"padding:6px 10px;background:#c62828;color:#fff;border:none;border-radius:4px\">Werksreset (System auf Anfang)</button></form>"));
   client.print(F("</div>"));
   // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns (#c1, #c2) sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
   // c1 = Countdown zur nächsten Fütterung, c2 = Countdown zur übernächsten Fütterung
@@ -454,9 +456,9 @@ void webHandleClient() {
     battMarkReplacedNow();
     client.print(F("HTTP/1.1 303 See Other\r\n"));
     client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
-  } else if (reqLine.startsWith("POST /feedreset")) {
-    // Tagesmarker fedToday1/2 zuruecksetzen (Test / Zeitumstellung)
-    feedMarkersReset();
+  } else if (reqLine.startsWith("POST /factoryreset")) {
+    // Werksreset: komplettes System auf Anfang (Config, Fuetterung, Batteriedatum)
+    factoryReset();
     client.print(F("HTTP/1.1 303 See Other\r\n"));
     client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
   } else if (reqLine.startsWith("GET /status")) {
