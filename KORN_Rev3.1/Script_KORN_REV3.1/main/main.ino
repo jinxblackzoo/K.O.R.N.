@@ -1213,6 +1213,16 @@ bool requestImmediateFeed() {
   if (feedingInProgress) return false;
   feedingInProgress = true;
 
+  // Tagesmarker VOR Motorstart setzen und persistieren (Rev2.1-Prinzip):
+  // Reboot/Watchdog-Reset waehrend oder kurz nach der Fuetterung darf nicht
+  // dazu fuehren, dass das Nachhol-Fenster erneut fuettert (Doppelfuetterung).
+  // Eine angefangene Fuetterung zaehlt als erledigt.
+  if (nextFeedSrc == SRC_SCHED1) {
+    fedToday1 = true; pendingSched1 = false; feedStateSave();
+  } else if (nextFeedSrc == SRC_SCHED2) {
+    fedToday2 = true; pendingSched2 = false; feedStateSave();
+  }
+
   // Aktuelle Zeit bestimmen (RTC oder millis()-Fallback)
   DateTime nowDt;
   int nowSec = -1;
