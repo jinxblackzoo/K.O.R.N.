@@ -30,6 +30,10 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 // Batterie-Alters-Tracker aus main.ino (Einbaudatum im EEPROM)
 int battAgeMonths();
 void battMarkReplacedNow();
+// Tagesmarker aus main.ino (Status + Reset fuer Tests/Zeitumstellung)
+bool fed1Done();
+bool fed2Done();
+void feedMarkersReset();
 // Hilfsfunktion formatHM() aus main.ino
 void formatHM(char* buf, size_t len, int h, int m);
 // Event-Log-Box aus main.ino (letzte Einträge auf der Startseite)
@@ -160,6 +164,9 @@ static void handleRoot(WiFiClient &client) {
   int laufzeitSek = steps / 1000; // steps / FEED_STEPS_PER_SEC
   client.print(F("<p><b>Laufzeit:</b> ")); client.print(laufzeitSek); client.print(F("s"));
   client.print(F(" | <b>RTC-Status:</b> ")); client.print(rtcOk?F("OK"):F("Fehler"));
+  client.print(F(" | <b>Heute gef&uuml;ttert:</b> "));
+  client.print(F("1:")); client.print(fed1Done()?F("ja"):F("nein"));
+  client.print(F(" 2:")); client.print(fed2Done()?F("ja"):F("nein"));
   client.print(F("</p>"));
 
   // AP-Infos (SSID/IP)
@@ -252,6 +259,11 @@ static void handleRoot(WiFiClient &client) {
     client.print(F("<form method=\"POST\" action=\"/battswap\" style=\"display:inline;margin-left:8px\" onsubmit=\"return confirm('Einbaudatum der CR2032 auf heute setzen?')\">"));
     client.print(F("<button type=\"submit\" style=\"padding:6px 10px\">Batterie heute getauscht</button></form>"));
   }
+  client.print(F("</div>"));
+  // Test-Helfer: Tagesmarker zuruecksetzen (in Rev2.1 der EEPROM-Reset-Jumper 12-13)
+  client.print(F("<div style=\"margin-top:6px\">"));
+  client.print(F("<form method=\"POST\" action=\"/feedreset\" style=\"display:inline\" onsubmit=\"return confirm('Heute-gefuettert-Marker wirklich zuruecksetzen? Beide Fuetterungen duerfen danach heute nochmal laufen.')\">"));
+  client.print(F("<button type=\"submit\" style=\"padding:6px 10px\">Tagesmarker zur&uuml;cksetzen (Test)</button></form>"));
   client.print(F("</div>"));
   // Minimal-Skript: aktualisiert die Status-Uhr (#clock) und Countdowns (#c1, #c2) sekündlich, basierend auf RTC-H:M:S + Date.now()-Delta
   // c1 = Countdown zur nächsten Fütterung, c2 = Countdown zur übernächsten Fütterung
@@ -440,6 +452,11 @@ void webHandleClient() {
   } else if (reqLine.startsWith("POST /battswap")) {
     // Einbaudatum der CR2032 auf heute setzen (Web-Button)
     battMarkReplacedNow();
+    client.print(F("HTTP/1.1 303 See Other\r\n"));
+    client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
+  } else if (reqLine.startsWith("POST /feedreset")) {
+    // Tagesmarker fedToday1/2 zuruecksetzen (Test / Zeitumstellung)
+    feedMarkersReset();
     client.print(F("HTTP/1.1 303 See Other\r\n"));
     client.print(F("Location: /\r\nConnection: close\r\n\r\n"));
   } else if (reqLine.startsWith("GET /status")) {

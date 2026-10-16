@@ -124,6 +124,11 @@ void cfgUpdateAndSave(uint8_t h1, uint8_t m1, uint8_t h2, uint8_t m2, bool activ
 int battAgeMonths();          // Monate seit Einbau, -1 = Datum unbekannt
 void battMarkReplacedNow();   // Einbaudatum auf heute setzen (Web-Button)
 
+// Tagesmarker-Status fuer die Web-UI und Test-Reset
+bool fed1Done();
+bool fed2Done();
+void feedMarkersReset();      // fedToday1/2 + pending zuruecksetzen (Test/Zeitumstellung)
+
 // Watchdog-Refresh: in loop() und aus motor.ino während Motorlauf aufgerufen
 void watchdogRefresh();
 // Event-Log (Ringpuffer, letzte Einträge auf der Homepage)
@@ -1056,6 +1061,9 @@ void loop() {
       } else if (!fedToday1 && crossed1) {
         // Crossing erkannt, aber nicht bei :00 -> als pending merken
         pendingSched1 = true;
+      } else if (crossed1) {
+        // Diagnose: Zielzeit erreicht, aber heute bereits gefuettert (EEPROM-Marker)
+        logEvent("SCHED1 unterdrueckt: heute gefuettert");
       }
 
       // Nur eine geplante Fütterung pro Loop-Iteration durchführen
@@ -1091,6 +1099,9 @@ void loop() {
           // Crossing erkannt, aber nicht bei :00 -> als pending merken
           pendingSched2 = true;
         }
+      } else if (!didTrigger && gCfg.active2 && crossed2) {
+        // Diagnose: Zielzeit 2 erreicht, aber heute bereits gefuettert
+        logEvent("SCHED2 unterdrueckt: heute gefuettert");
       }
 
       // Nachholer für pending Termine (auch wenn :00 verpasst wurde)
@@ -1205,6 +1216,22 @@ void loop() {
     lastNowSec = nowSec;
     lastNowMs = nowMs;
   }
+}
+
+// ============================================================================
+// Tagesmarker: Getter fuer Web-UI + manueller Reset (z. B. nach Zeitumstellung
+// oder fuer Testlaeufe; in Rev2.1 war das der EEPROM-Reset-Jumper 12<->13)
+// ============================================================================
+bool fed1Done() { return fedToday1; }
+bool fed2Done() { return fedToday2; }
+
+void feedMarkersReset() {
+  fedToday1 = false;
+  fedToday2 = false;
+  pendingSched1 = false;
+  pendingSched2 = false;
+  feedStateSave();
+  logEvent("Tagesmarker zurueckgesetzt");
 }
 
 // ============================================================================
