@@ -25,6 +25,7 @@
 
 // Vorwärtsdeklaration: nötig, damit Arduino-Präprozessor-Prototypen KConfig kennen
 struct KConfig;
+struct BattInfo;
 
 #include <Arduino.h>
 #include <EEPROM.h>     // EEPROM-Backup für Konfiguration
