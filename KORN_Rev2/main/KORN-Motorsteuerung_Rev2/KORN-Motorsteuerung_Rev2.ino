@@ -39,14 +39,14 @@
 // ============================================================================
 
 // FÜTTERUNGSZEIT (24h Format)
-const int FUETTERUNG_STUNDE_1 = 7;    // Fütterung. ACHTUNG: Keine führende Null (z.B. 09) - C++ wertet das als Oktalzahl!
-const int FUETTERUNG_MINUTE_1 = 1;
+const int FUETTERUNG_STUNDE_1 = 17;    // Fütterung. ACHTUNG: Keine führende Null (z.B. 09) - C++ wertet das als Oktalzahl!
+const int FUETTERUNG_MINUTE_1 = 25;
 
 // MOTORPARAMETER
 const int MOTOR_BESCHLEUNIGUNG = 2000; // Beschleunigung in Steps/s²
 // Zeitbasierte Dosierung wie in Rev3: feste Schrittfrequenz + Dauer in Sekunden
 const int SCHRITTFREQUENZ = 1000;      // Steps pro Sekunde (fix)
-const int FUETTERUNG_DAUER_SEK = 5;    // Fütterungsdauer in Sekunden (1–60 s)
+const int FUETTERUNG_DAUER_SEK = 10;    // Fütterungsdauer in Sekunden (1–60 s)
 const bool MOTOR_RECHTS = false;        // true = Rechts (CW), false = Links (CCW)
 
 // TIMING-PARAMETER
@@ -82,6 +82,10 @@ RTC_DS3231 rtc;
 // Zustandsvariablen für Fütterungslogik
 bool fuetterung1_heute = false;  // Fütterung heute bereits erfolgt?
 int letzter_tag = -1;            // Letzter Tag für Tagesreset
+
+// Scheduler-Zustand (Weg B: Crossing-Detektion wie Rev3)
+long lastNowSec = -1;                 // Sekunde des Tages der letzten Prüfung (0..86399), -1 = noch nicht initialisiert
+unsigned long letzte_ausgabe_ms = 0;  // millis() der letzten seriellen Zeitausgabe (nicht-blockierend)
 
 void setup() {
   // Pins früh konfigurieren, bevor Ausgänge erstmals genutzt werden
@@ -203,12 +207,21 @@ void loop() {
   // Plausibilitätsprüfung: bei I2C-Störung können Müllwerte kommen
   if (jetzt.year() < 2024 || jetzt.year() > 2099) {
     Serial.println("⚠️ Ungültige RTC-Zeit gelesen - Durchlauf wird übersprungen!");
-    safeDelay(5000);
+    safeDelay(1000);
     return;
   }
   
-  // Zeitausgabe bei jedem Loop-Durchlauf (Loop läuft alle ZEIT_AUSGABE_INTERVALL Sekunden)
-  zeige_aktuelle_zeit();
+  // Zeitausgabe alle ZEIT_AUSGABE_INTERVALL Sekunden (nicht-blockierend über millis())
+  unsigned long nowMs = millis();
+  if (nowMs - letzte_ausgabe_ms >= (unsigned long)ZEIT_AUSGABE_INTERVALL * 1000UL) {
+    zeige_aktuelle_zeit();
+    letzte_ausgabe_ms = nowMs;
+  }
+  
+  // Aktuelle Sekunde des Tages (0..86399)
+  long nowSec = (long)jetzt.hour() * 3600L + (long)jetzt.minute() * 60L + jetzt.second();
+  // Erster Durchlauf: initialisieren -> kein Nachholen einer bereits vergangenen Zeit bei Boot
+  if (lastNowSec < 0) lastNowSec = nowSec;
   
   // Tagesreset um Mitternacht - Fütterungsflags zurücksetzen
   if (jetzt.day() != letzter_tag) {
@@ -231,20 +244,32 @@ void loop() {
     Serial.println(" - Flags zurückgesetzt (Heartbeat)");
   }
   
+  // Zielzeit der Fütterung in Sekunden des Tages
+  long zielSec = (long)FUETTERUNG_STUNDE_1 * 3600L + (long)FUETTERUNG_MINUTE_1 * 60L;
+  
+  // Crossing-Detektion (wrap-sicher über Mitternacht):
+  // Wurde zielSec im Intervall (lastNowSec, nowSec] überschritten?
+  bool ueberschritten;
+  if (lastNowSec <= nowSec) {
+    ueberschritten = (zielSec > lastNowSec) && (zielSec <= nowSec);
+  } else { // Tageswechsel zwischen zwei Prüfungen (z.B. 86390 -> 5)
+    ueberschritten = (zielSec > lastNowSec) || (zielSec <= nowSec);
+  }
+  
   // Fütterungszeit prüfen - FÜTTERUNG
-  if (!fuetterung1_heute && 
-      jetzt.hour() == FUETTERUNG_STUNDE_1 && 
-      jetzt.minute() == FUETTERUNG_MINUTE_1) {
-    
+  if (!fuetterung1_heute && ueberschritten) {
     Serial.println("🍽️ FÜTTERUNG STARTET...");
     fuetterungsvorgang();
     fuetterung1_heute = true;
     Serial.println("✅ Fütterung abgeschlossen!");
   }
   
-  // Warten bevor nächste Zeitprüfung
-  // Verhindert mehrfache Fütterung in derselben Minute
-  safeDelay((unsigned long)ZEIT_AUSGABE_INTERVALL * 1000UL);
+  // Aktuelle Sekunde als Referenz für den nächsten Durchlauf merken
+  lastNowSec = nowSec;
+  
+  // Kurze, nicht-blockierende Pause (Watchdog-freundlich).
+  // Klein genug, damit die Zielzeit sekundengenau erkannt wird.
+  safeDelay(500);
 }
 
 // ============================================================================

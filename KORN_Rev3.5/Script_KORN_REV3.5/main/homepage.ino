@@ -420,8 +420,10 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("<p><small><strong>Hinweise:</strong><br>"));
   client.print(F("• Mindestabstand zwischen Fütterungen: 2 Minuten<br>"));
   client.print(F("• Max. Laufzeit: 10 Minuten (thermische Belastung NEMA17)<br>"));
-  client.print(F("• Mittlere Futteraufnahme: 110-130g/Henne/Tag "));
-  client.print(F("(Quelle: <a href=\"https://www.huehner-info.de/infos/futter_bestandteile3.htm\" target=\"_blank\" rel=\"noopener\">huehner-info.de</a>)"));
+  client.print(F("• Mittlere Futteraufnahme pro Pfau: circa 300g/Tag "));
+  client.print(F("(Quelle: <a href=\"https://www.deuka.de/heimtiere/gefluegel/wachtel-und-ziergefluegelfutter\" target=\"_blank\" rel=\"noopener\">deuka.de</a>)<br>"));
+  client.print(F("• Pro 5 Sek. Motorlaufzeit werden circa 100g Deuka W/Z Futter gekörnt abgegeben<br>"));
+  client.print(F("• Für größere Mengen: Verwende die App oder das Web-UI"));
   client.print(F("</small></p>"));
   client.print(F("<button type=\"submit\">Speichern</button></form>"));
   client.print(F("<hr>"));
@@ -446,6 +448,7 @@ static void handleRoot(WiFiClient &client) {
   client.print(F("</div>"));
   // Trenner vor Zeit-Update
   client.print(F("<hr>"));
+
   // NTP-Status Anzeige (deaktivierter Button)
   client.print(F("<div style=\"margin-top:6px\">"));
   if (ntpIsSynced()) {

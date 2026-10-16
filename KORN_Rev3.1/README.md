@@ -5,12 +5,6 @@ K.O.R.N. ist ein robuster, Open-Source/Hardware, wasserdichter, mit einfachen Mi
 
 ## 🎯 Projektübersicht
 
-## Rev.4 Ideen
-	- Nur den NEMA17 im Gehäuse lassen. Controller und Stromversorgung in ein besser zugängliches Gehäuse 		extern mit Hutschienenmontage
-	- AC/DC Wandler auf Hutschiene
-	- Umstieg von Arduino auf Raspi Pico 2 WH?
-
-
 Aufgrund der enttäuschenden Erfahrung mit gekauften Fütterungsautomaten welche trotz der teils hohen Preise entweder nach drei Wochen defekt waren, oder ganze Mäusefamilien durchfütterten, musste eine Eigenkonstruktion her. Die Entscheidungsgrundlage für das gewählte System mit einer Förderschnecke in einem Rohr, basiert auf einer Recherche im Dubbel Ausgabe von 2001.
 
 Es handelt sich um einen **Stetigförderer (Schnecke)**, der Schüttgut (Futter) aus einem Silo (KG-Rohr) in einen Auswurfschacht befördert. Das Gehäuse besteht aus überall erhältlichen, robusten und günstigen HT-, bzw KG-Rohren.
@@ -22,7 +16,7 @@ Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellunge
 
 ### Arduino Uno + Stepper-Treiber System
 - **Arduino Uno R4 Wifi** (Mikrocontroller)
-- **DS1302 RTC** (Realtime Clock für präzise Zeitsteuerung)
+- **DS3231 RTC** (Realtime Clock für präzise Zeitsteuerung, I2C)
 - **NEMA Stepper Motor** Antrieb
 - **DM320T Stepper-Motor Treiber** Motortreiber
 - **Relais-ModulJQC3F oder ähnliches  NO/COM/NC** (Stromversorgung Motor ein/aus)
@@ -31,12 +25,12 @@ Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellunge
 
 ### 🔌 Verkabelung
 ```
-DS1302RTC:
+DS3231 RTC:
 ├── VCC     → Arduino 5V ⚠️ WICHTIG: NICHT 3,3V!
 ├── GND     → Arduino GND
-├── CLK     → Arduino Pin 7
-└── DAT     → Arduino Pin 9
-└── RST     → Arduino Pin 12
+├── SDA     → Arduino Pin A4
+└── SCL     → Arduino Pin A5
+
 
 Stepper-Treiber DM320T:
 ├── PUL+    → Arduino Pin 2 (Schrittimpulse)
@@ -71,13 +65,25 @@ Relay:
 ```
 
 #### Hinweise zur Verdrahtung
-* **DS1302**: 
-  - ⚠️ **KRITISCH**: VCC MUSS an 5V! Mit 3,3V funktioniert die RTC nicht und verursacht Bootloops!
-  - CR2032-Stützbatterie einsetzen (~5 Jahre Lebensdauer)
+* **DS3231**: 
+  - VCC an Arduino 5V (das DS3231-IC selbst arbeitet 2,3–5,5V, viele Module sind aber auf 5V-Pegel ausgelegt)
+  - SDA an A4, SCL an A5 (I2C)
   - Gemeinsame Masse (GND) mit Arduino und Peripherie sicherstellen
-* **DM320T** (Common-Cathode): 
-  - PUL−, DIR−, ENA− an Arduino GND
-  - OPTO nicht am Arduino verwenden -> Muss an +5V Versorgung
+  - ⚠️ **Backup-Batterie**: Viele DS3231-Module laden die Backup-Zelle. Verwende nur eine **wiederaufladbare LIR2032** (inkl. passender Ladeschaltung) oder bau die Ladeschaltung aus. Eine nicht wiederaufladbare **CR2032** kann bei dauerhaftem Laden auslaufen, heiß werden oder platzen.
+* **DM320T** (Common-Cathode, Standard): 
+  - `OPTO` → Arduino GND
+  - `PUL+` → Arduino D2, `PUL−` → GND
+  - `DIR+` → Arduino D3, `DIR−` → GND
+  - `ENA+` → Arduino D5, `ENA−` → GND
+  - `+Vdc` / `GND` → Motornetzteil 12V
+  - `A+`, `A−`, `B+`, `B−` → NEMA17
+  - In `motor.ino` bereits eingestellt: `ENABLE_ACTIVE_HIGH = true`, `INVERT_STEP = false`
+* **Alternativ: Common-Anode** (nur falls dein Modul/Layout das so erfordert): 
+  - `OPTO` → Arduino 5V
+  - `PUL−` → Arduino D2, `PUL+` → 5V
+  - `DIR−` → Arduino D3, `DIR+` → 5V
+  - `ENA−` → Arduino D5, `ENA+` → 5V
+  - Dann `ENABLE_ACTIVE_HIGH = false` und `INVERT_STEP = true` setzen
 * **Relais**: 
   - HW-482: Kann ACTIVE-HIGH oder ACTIVE-LOW sein (je nach Modul-Variante)
   - **Test:** LED am Modul leuchtet bei HIGH = ACTIVE-HIGH, bei LOW = ACTIVE-LOW
@@ -87,7 +93,7 @@ Relay:
   - Pin 11 als permanentes LOW (OUTPUT)
   - Pin 10 als INPUT_PULLUP
   - Kurzschluss 10 ↔ 11 löst sofort aus (mit 150ms Entprellung)
-* **ENA-Logik**: ENA=HIGH aktiviert den Treiber; ENA=LOW deaktiviert
+* **ENA-Logik**: ENA=HIGH aktiviert den Treiber; ENA=LOW deaktiviert (Common-Cathode, Pin gibt Strom)
 
 ## 🚀 Software-Features
 
@@ -99,12 +105,10 @@ Relay:
 * **Live-Updates**: Webseite zeigt aktuelle Uhrzeit und letzte Fütterung in Echtzeit
 
 ### 💾 Konfigurationsspeicherung & Datensicherheit
-* **Doppelte Datensicherung**: Konfiguration wird parallel in RTC-RAM UND EEPROM gespeichert
-* **Automatisches Backup**: Bei jedem Speichervorgang wird EEPROM aktualisiert
+* **EEPROM-Speicher**: Konfiguration wird im Arduino-EEPROM gespeichert
 * **Batterie-Ausfallschutz**: Bei CR2032-Ausfall wird Config aus EEPROM wiederhergestellt
 * **Status-Anzeige**: 
-  - **CFG:RAM** = Aus RTC-RAM geladen (normal)
-  - **CFG:EEPROM** = Aus EEPROM wiederhergestellt (nach Batterieausfall)
+  - **CFG:EEPROM** = Aus EEPROM geladen (normal)
   - **CFG:DEF** = Standard-Werte (erster Start)
 * **EEPROM-Lebensdauer**: ~100.000 Schreibzyklen (bei normaler Nutzung jahrelang haltbar)
 
@@ -125,7 +129,7 @@ Relay:
   - Robuste HTTP-Header: No-Cache, Connection: close, Sicherheits-Header (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
   - 303 Redirect nach Formularaktionen (verhindert doppeltes Absenden bei Reload)
   - Footer mit GitHub-Link und Build-Datum (vom letzten Sketch-Build über __DATE__/__TIME__)
-  - Batteriestatus (CR2032) als Anzeige-Button: Grün=OK, Rot=Bitte CR2032 tauschen (Heuristik: RTC-Zeit + RTC-RAM)
+  - Batteriestatus (CR2032) als Anzeige-Button: Grün=OK, Rot=Bitte CR2032 tauschen (Heuristik: RTC-Zeit gültig)
 * ✅ Manuelle Bedienung:
   - ✅ Kurzschluss Pin 10 ↔ 11 als Taster
   - ✅ Sofortige Fütterung unabhängig vom Zeitplan
@@ -147,8 +151,10 @@ Relay:
 - Standard-SSID: `KORN`
 - Standard-Passwort: `Chaosfeeder`
 
+⚠️ **Sicherheit**: Das Standard-Passwort ist im Quellcode und in der README öffentlich. Jeder im Funkbereich, der sich mit dem WLAN verbindet, kann füttern und Einstellungen ändern. Für den realen Einsatz unbedingt ein eigenes starkes Passwort in `setup()` setzen.
+
 Wo ändern?
-- Datei: `KORN_Rev3/Script_KORN_REV3/main/main.ino`
+- Datei: `KORN_Rev3.1/Script_KORN_REV3.1/main/main.ino`
 - In `setup()` wird der Access Point gestartet:
 
 ```cpp
@@ -159,7 +165,6 @@ apInit("KORN", "Chaosfeeder");
 Hinweise:
 - Nach Änderung neu kompilieren/flashen.
 - SSID/PW auch in der seriellen Startmeldung ausgegeben (zum schnellen Verbinden).
-- Sicherheit: Für den Einsatz in fremden Umgebungen eigenes Passwort wählen.
 - WLAN-Sicherheit: WPA2-PSK. __Kein zusätzlicher Web-Login__ auf der Seite nötig; die Zugangsdaten gelten nur für das WLAN.
 
 ### 🧰 Standardwerte
@@ -171,10 +176,10 @@ Hinweise:
 
 ## 💾 Persistenz & Batterie
 
-* Konfiguration wird im batteriegepufferten RAM der **DS1302** gespeichert und übersteht Stromausfälle bei intakter **CR2032**.
-* Ist die Batterie leer/fehlend oder werden Daten korrupt, lädt das Gerät **Werkseinstellungen** (Defaults).
-* Heuristischer Batterietest: Batterie gilt als „OK“, wenn die **RTC-Zeit gültig** ist und die **Konfiguration aus RTC‑RAM** geladen wurde. Die Web‑UI zeigt einen Anzeige‑Button (Grün/Rot).
-* Indikatoren in der seriellen Ausgabe: `RTC: OK/--`, `CFG: RAM/DEF`.
+* Konfiguration wird im **EEPROM des Arduino** gespeichert und übersteht Stromausfälle (die DS3231 besitzt kein nutzbares RAM).
+* Sind die EEPROM-Daten korrupt oder nicht vorhanden, lädt das Gerät **Werkseinstellungen** (Defaults).
+* Heuristischer Batterietest: Batterie gilt als „OK“, wenn die **RTC-Zeit gültig** ist. Die Web‑UI zeigt einen Anzeige‑Button (Grün/Rot).
+* Indikatoren in der seriellen Ausgabe: `RTC: OK/--`, `CFG: EEPROM/DEF`.
 
 ---
 
@@ -314,8 +319,8 @@ Der Code wurde mit Hilfe von **künstlicher Intelligenz** entworfen, optimiert u
 
 ### 🗂️ Projektstruktur
 ```
-KORN_Rev3/
-├── Script_KORN_REV3/
+KORN_Rev3.1/
+├── Script_KORN_REV3.1/
 │   └── main/
 │       ├── main.ino
 │       ├── homepage.ino
@@ -395,7 +400,7 @@ Hinweise:
 - Signalführung kurz, sauber, möglichst verdrillt (z. B. PUL↔GND, DIR↔GND, ENA↔GND).
 
 Passende Software‑Einstellungen (bereits im Code vorgesehen):
-- In `KORN_Rev3/Script_KORN_REV3/main/motor.ino` bei dieser Verdrahtung typischerweise:
+- In `KORN_Rev3.1/Script_KORN_REV3.1/main/motor.ino` bei dieser Verdrahtung typischerweise:
   - `ENABLE_ACTIVE_HIGH = false`
   - `INVERT_STEP = true`
   - `INVERT_DIR` je nach Drehrichtung (falls invertiert → `true`)
@@ -410,8 +415,8 @@ Passende Software‑Einstellungen (bereits im Code vorgesehen):
     - Stepper-Ansteuerung für den DM320T (`#include <AccelStepper.h>`) 
   - WiFiS3 (Autor: Arduino)
     - Wird für den Access-Point und den Webserver benötigt (`#include <WiFiS3.h>`)
-  - Rtc (Autor: Makuna)
-    - Unterstützt DS1302-RTC inkl. RAM-Nutzung (`RtcDS1302`/Makuna-Library)
+  - RTClib by Adafruit (Autor: Adafruit / Michael Hord)
+    - Unterstützt DS3231-RTC über I2C (`RTC_DS3231`/RTClib)
 
 Hinweise:
 - Installation jeweils über „Werkzeuge → Bibliotheken verwalten…“, nach den oben genannten Namen suchen.

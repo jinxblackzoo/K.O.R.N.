@@ -24,6 +24,12 @@ Revision 3 wurde entwickelt als autarke Off-Grid Funktion. Ein WLAN mit Internet
 Stattdessen kann KORN mitten im Feld ohne eigene Internetverbindung installiert werden. Der Arduino UNO R4 spannt einen eigenen WLAN Accesspoint auf. Mit diesem kann man sich mittels Smartphone verbinden.
 Tipp: Alte Smartphones ohne Internet/Benutzerdaten einfach auf Werkseinstellungen zurücksetzen. Dann mit dem WLAN "KORN" verbinden und im Browser `192.168.4.1` öffnen. Voilà, fertig ist das eigene CCCC (ChickenCoopControlCenter) 🥳 😉
 
+## Revision 3.1 basiert auf Rev.3 mit RTC DS3231 statt DS1302 ✅ Fertig
+
+Revision 3.1 ist funktional identisch mit Rev.3 (Off-Grid Access Point), verwendet jedoch die **DS3231 RTC** (I2C, SDA=A4, SCL=A5) anstelle der DS1302. Da die DS3231 kein nutzbares RAM besitzt, wird die Konfiguration ausschließlich im EEPROM des Arduino gespeichert. Als Bibliothek kommt **RTClib by Adafruit** statt "Rtc by Makuna" zum Einsatz.
+
+📖 **Detaillierte Dokumentation:** [`KORN_Rev3.1/README.md`](./KORN_Rev3.1/README.md)
+
 ## Revision 3.5 basiert auf Rev.3 (Arduino UNO R4 WiFi) mit neuer WLAN-Logik ✅ Fertig
 
 Revision 3.5 verwendet die gleiche Hardware und CAD wie Rev.3/Rev.4, ändert jedoch den WLAN-Betrieb grundlegend:
@@ -52,7 +58,7 @@ Statt eines eigenen Access Points verbindet sich KORN nun mit einem vorhandenen 
 
 **Ablauf:** Beim ersten Start oder bei fehlendem WLAN öffnet der Arduino einen temporären Einrichtungs-AP. Nach Speichern der Zugangsdaten verbindet sich KORN automatisch mit dem Heimnetz.
 
-📖 **Detaillierte Dokumentation:** [`KORN_Rev3.5/README_REV3.5.md`](./KORN_Rev3.5/README_REV3.5.md)
+📖 **Detaillierte Dokumentation:** [`KORN_Rev3.5/README.md`](./KORN_Rev3.5/README.md)
 
 ## Revision 4 basiert auf Rev.3/3.5 CAD mit neuem Controller: Raspberry Pi Pico W (Geplant)
 

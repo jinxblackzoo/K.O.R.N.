@@ -8,3 +8,6 @@ Projektplan*.odt
 Projektplan*.pdf
 **/KORN Projektbeschreibung*
 Projektbeschreibung*
+
+# Secrets/Umgebungsvariablen
+.env
